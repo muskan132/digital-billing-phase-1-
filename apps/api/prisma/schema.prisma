@@ -1,0 +1,139 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserType {
+  EXTERNAL
+  INTERNAL
+}
+
+enum UserRole {
+  STORE_STAFF
+  MERCHANT_ADMIN
+  OPS_SUPPORT
+  PLATFORM_ADMIN
+}
+
+enum BillType {
+  RECEIPT
+  TAX_INVOICE
+}
+
+enum OrderStatus {
+  SUCCESS
+  NON_SUCCESS
+}
+
+enum Channel {
+  SMS
+  EMAIL
+}
+
+enum BroadcastStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
+model Merchant {
+  id                String     @id @default(cuid())
+  jiopayMid         String     @unique
+  name              String
+  secretKeyEnc      Bytes
+  users             User[]
+  templates         Template[]
+  orders            Order[]
+  defaultTemplateId String?
+  defaultTemplate   Template?  @relation("MerchantDefault", fields: [defaultTemplateId], references: [id])
+  createdAt         DateTime   @default(now())
+}
+
+model User {
+  id         String    @id @default(cuid())
+  merchantId String?
+  merchant   Merchant? @relation(fields: [merchantId], references: [id])
+  type       UserType
+  role       UserRole
+  email      String    @unique
+  createdAt  DateTime  @default(now())
+}
+
+model Template {
+  id           String     @id @default(cuid())
+  merchantId   String?
+  merchant     Merchant?  @relation(fields: [merchantId], references: [id])
+  name         String
+  billType     BillType
+  layoutSchema Json
+  version      Int        @default(1)
+  bills        Bill[]
+  defaultOf    Merchant[] @relation("MerchantDefault")
+  createdAt    DateTime   @default(now())
+}
+
+model Order {
+  id                 String      @id @default(cuid())
+  merchantId         String
+  merchant           Merchant    @relation(fields: [merchantId], references: [id])
+  idempotencyKey     String
+  merchantTxnNo      String
+  paymentId          String
+  txnId              String      @unique
+  amountPaise        BigInt
+  currency           String      @default("INR")
+  responseCode       String
+  paymentMode        String?
+  paymentDateTime    String?
+  status             OrderStatus
+  customerMobile_pii String?
+  customerEmail_pii  String?
+  rawCallback        Json
+  bill               Bill?
+  link               Link?
+  broadcasts         Broadcast[]
+  createdAt          DateTime    @default(now())
+
+  @@index([merchantId])
+}
+
+model Bill {
+  id          String   @id @default(cuid())
+  orderId     String   @unique
+  order       Order    @relation(fields: [orderId], references: [id])
+  billType    BillType
+  templateId  String
+  template    Template @relation(fields: [templateId], references: [id])
+  totalPaise  BigInt
+  currency    String   @default("INR")
+  snapshot    Json
+  artifactVer Int      @default(1)
+  createdAt   DateTime @default(now())
+}
+
+model Link {
+  id         String   @id @default(cuid())
+  identifier String   @unique
+  orderId    String   @unique
+  order      Order    @relation(fields: [orderId], references: [id])
+  createdAt  DateTime @default(now())
+}
+
+model Broadcast {
+  id        String          @id @default(cuid())
+  orderId   String
+  order     Order           @relation(fields: [orderId], references: [id])
+  channel   Channel
+  recipient String
+  status    BroadcastStatus @default(PENDING)
+  attempts  Int             @default(0)
+  error     String?
+  createdAt DateTime        @default(now())
+  sentAt    DateTime?
+
+  @@index([status, createdAt])
+}
