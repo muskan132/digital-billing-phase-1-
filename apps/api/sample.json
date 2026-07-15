@@ -11,11 +11,11 @@
    "amount": "1.00",
    "responseCode": "0000",
    "respDescription": "Transaction successful",
-   "merchantId": "JP200xxx00007",
+   "merchantId": "JP2000000007",
    "merchantTxnNo": "UAT1280835036",
    "txnID": "7700206148341",
    "paymentDateTime": "20250910123438",
    "paymentID": "82189795538",
    "oth_charge": false,
-   "secureHash": "161aeca47530e1766ecb6da723303bad65a09ebadc1126fb32e18d9f50d0c216"
+   "secureHash": "088f13bfc1639c4dfd1f76348e343ef74ad0657cf1f1c2cc01c163826055aa88"
 }
