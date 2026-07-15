@@ -17,7 +17,12 @@
   },
   "devDependencies": {
     "@nestjs/cli": "^10.4.9",
+    "@types/node": "^22.10.5",
     "prisma": "^6.1.0",
+    "ts-node": "^10.9.2",
     "typescript": "^5.7.2"
+  },
+  "prisma": {
+    "seed": "ts-node prisma/seed.ts"
   }
 }

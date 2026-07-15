@@ -22,6 +22,7 @@ model Merchant {
   users          User[]
   templates      Template[]
   orders         Order[]
+  defaultChannel Channel  @default(EMAIL)             // channel for PENDING Broadcasts created by P-1 (D-11)
   defaultTemplateId String?
   defaultTemplate   Template? @relation("MerchantDefault", fields: [defaultTemplateId], references: [id])
   createdAt      DateTime @default(now())

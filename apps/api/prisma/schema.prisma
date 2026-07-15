@@ -48,6 +48,7 @@ model Merchant {
   users             User[]
   templates         Template[]
   orders            Order[]
+  defaultChannel    Channel    @default(EMAIL)
   defaultTemplateId String?
   defaultTemplate   Template?  @relation("MerchantDefault", fields: [defaultTemplateId], references: [id])
   createdAt         DateTime   @default(now())
