@@ -59,7 +59,8 @@ model Order {                                         // payment facts from the 
   merchantTxnNo     String
   paymentId         String
   txnId             String   @unique                   // JioPay txnID — UNIQUE = at-least-once idempotency key (D-8, upsert target)
-  amountPaise       BigInt                             // from amount string rupees; >= 0
+  amountPaise       BigInt?                            // from amount string rupees; >= 0
+                                                         // null for NON_SUCCESS orders or any SUCCESS callback whose amount failed to parse (see D-15)
   currency          String   @default("INR")
   responseCode      String                             // "0000" = success
   paymentMode       String?

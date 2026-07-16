@@ -1,4 +1,4 @@
-import { Body, Controller, HttpCode, Logger, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, HttpCode, Logger, Post, Req, UseGuards } from '@nestjs/common';
 import { JioPayCallbackDto } from './jiopay-callback.dto';
 import { maskEmail, maskMobile } from '../common/mask.util';
 import { SecureHashGuard } from './secure-hash.guard';
@@ -13,13 +13,13 @@ export class CallbacksController {
   @Post()
   @HttpCode(200)
   @UseGuards(SecureHashGuard)
-  async receive(@Body() callback: JioPayCallbackDto) {
+  async receive(@Body() callback: JioPayCallbackDto, @Req() req: { body: unknown }) {
     this.logger.log(
       `Received callback: merchantTxnNo=${callback.merchantTxnNo ?? '(absent)'} ` +
         `txnID=${callback.txnID ?? '(absent)'} responseCode=${callback.responseCode ?? '(absent)'} ` +
         `mobile=${maskMobile(callback.customerMobileNo)} email=${maskEmail(callback.customerEmailID)}`,
     );
-    await this.callbacksService.persist(callback);
+    await this.callbacksService.persist(callback, req.body);
     return { received: true };
   }
 }

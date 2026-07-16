@@ -8,14 +8,14 @@
    "customerEmailID": "user@example.com",
    "paymentSubInstType": "DC",
    "paymentMode": "Card",
-   "amount": "1.0005",
+   "amount": "1000",
    "responseCode": "0000",
    "respDescription": "Transaction successful",
    "merchantId": "JP2000000007",
    "merchantTxnNo": "UAT1280835036",
-   "txnID": "7700206148341",
+   "txnID": "7700206148341-MALFORMED02",
    "paymentDateTime": "20250910123438",
    "paymentID": "82189795538",
    "oth_charge": false,
-   "secureHash": "c69c01bcc3425db1f57c879032bbf5b85be827b3acb25a828676d25c754d113b"
+   "secureHash": "0620a3309117e3c02fac852c25fe88f5f59e5ad0c8f72311a6e0c5ff378a458b"
 }

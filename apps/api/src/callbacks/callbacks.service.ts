@@ -14,7 +14,7 @@ export class CallbacksService {
 
   constructor(private readonly prisma: PrismaService) {}
 
-  async persist(callback: JioPayCallbackDto): Promise<void> {
+  async persist(callback: JioPayCallbackDto, rawBody: unknown): Promise<void> {
     const txnId = callback.txnID;
     if (!txnId) {
       this.logger.warn('txnId absent — malformed callback, not persisted');
@@ -30,8 +30,10 @@ export class CallbacksService {
       return;
     }
 
-    const amountPaise = rupeesToPaise(callback.amount ?? '');
-    const idempotencyKey = `PG:${callback.merchantTxnNo}#${callback.paymentID}`;
+    const idempotencyKey =
+      callback.merchantTxnNo && callback.paymentID
+        ? `PG:${callback.merchantTxnNo}#${callback.paymentID}`
+        : null;
 
     const orderFields = {
       merchantId: merchant.id,
@@ -39,20 +41,35 @@ export class CallbacksService {
       merchantTxnNo: callback.merchantTxnNo ?? '',
       paymentId: callback.paymentID ?? '',
       txnId,
-      amountPaise,
       currency: 'INR',
       responseCode: callback.responseCode ?? '',
       paymentMode: callback.paymentMode,
       paymentDateTime: callback.paymentDateTime,
       customerMobile_pii: callback.customerMobileNo,
       customerEmail_pii: callback.customerEmailID,
-      rawCallback: JSON.parse(JSON.stringify(callback)) as Prisma.InputJsonValue,
+      rawCallback: rawBody as Prisma.InputJsonValue,
     };
 
     if (callback.responseCode !== SUCCESS_RESPONSE_CODE) {
       await this.prisma.order.upsert({
         where: { txnId },
-        create: { ...orderFields, status: 'NON_SUCCESS' },
+        create: { ...orderFields, status: 'NON_SUCCESS', amountPaise: null },
+        update: {},
+      });
+      return;
+    }
+
+    let amountPaise: bigint;
+    try {
+      amountPaise = rupeesToPaise(callback.amount ?? '');
+    } catch {
+      this.logger.warn(
+        `txnId=${txnId} — 0000 callback with unparseable amount, config/contract error — ` +
+          `committing Order(status=SUCCESS, amountPaise=null), skipping Bill/Link/Broadcast`,
+      );
+      await this.prisma.order.upsert({
+        where: { txnId },
+        create: { ...orderFields, status: 'SUCCESS', amountPaise: null },
         update: {},
       });
       return;
@@ -64,7 +81,7 @@ export class CallbacksService {
       );
       await this.prisma.order.upsert({
         where: { txnId },
-        create: { ...orderFields, status: 'SUCCESS' },
+        create: { ...orderFields, status: 'SUCCESS', amountPaise },
         update: {},
       });
       return;
@@ -84,6 +101,7 @@ export class CallbacksService {
       create: {
         ...orderFields,
         status: 'SUCCESS',
+        amountPaise,
         bill: {
           create: {
             billType: merchant.defaultTemplate.billType,

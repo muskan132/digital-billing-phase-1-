@@ -81,11 +81,11 @@ model Order {
   id                 String      @id @default(cuid())
   merchantId         String
   merchant           Merchant    @relation(fields: [merchantId], references: [id])
-  idempotencyKey     String
+  idempotencyKey     String?
   merchantTxnNo      String
   paymentId          String
   txnId              String      @unique
-  amountPaise        BigInt
+  amountPaise        BigInt?
   currency           String      @default("INR")
   responseCode       String
   paymentMode        String?

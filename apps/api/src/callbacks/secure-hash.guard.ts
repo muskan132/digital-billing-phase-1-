@@ -1,4 +1,5 @@
 import { CanActivate, ExecutionContext, Injectable, UnauthorizedException } from '@nestjs/common';
+import { timingSafeEqual } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { computeSecureHash } from './secure-hash.util';
 
@@ -29,7 +30,11 @@ export class SecureHashGuard implements CanActivate {
     }
 
     const expected = computeSecureHash(body, merchant.secretKeyEnc);
-    if (expected !== secureHash.toLowerCase()) {
+    const expectedBuf = Buffer.from(expected, 'hex');
+    const providedBuf = Buffer.from(secureHash.toLowerCase(), 'hex');
+    const isMatch =
+      expectedBuf.length === providedBuf.length && timingSafeEqual(expectedBuf, providedBuf);
+    if (!isMatch) {
       throw new UnauthorizedException('Invalid secureHash');
     }
 

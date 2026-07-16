@@ -16,6 +16,7 @@ describe('rupeesToPaise', () => {
     ['0'],
     ['-5.00'],
     ['abc'],
+    ['1.0'],
   ])('throws for %s', (input) => {
     expect(() => rupeesToPaise(input)).toThrow();
   });
