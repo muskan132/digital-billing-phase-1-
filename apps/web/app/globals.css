@@ -56,3 +56,26 @@ body {
   padding: 16px;
   color: var(--semantic-error);
 }
+
+.btn-download {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 480px;
+  margin: 0 auto 24px;
+  padding: 10px 16px;
+  background: var(--primary);
+  color: var(--canvas);
+  border: none;
+  border-radius: 8px;
+  font-size: 16px;
+  font-weight: 400;
+  cursor: pointer;
+}
+
+/* Bill-only PDF output: hide everything except the rendered bill card. */
+@media print {
+  .btn-download {
+    display: none;
+  }
+}
