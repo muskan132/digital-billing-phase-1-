@@ -67,3 +67,7 @@
 ### D-16 · Money regex requires exactly 2 decimal digits
 **Decision:** `rupeesToPaise()`'s pattern is `^\d+\.\d{2}$` (was `\d{1,2}`) — a single-decimal string like `"1.0"` is rejected, same as `"1000"` and `"1.005"`.
 **Reason:** one consistent rule (exactly 2 decimals or reject) is safer than a partial-decimal exception that was accepted by the regex but never tested, which could have silently produced a 10x money error.
+
+### D-17 · Bill.snapshot is a whitelisted, non-PII projection
+**Decision:** `Bill.snapshot` (written by P-1) may only ever contain the fields currently in it (`merchantName`, `amountPaise`, `currency`, `paymentMode`, `paymentDateTime`) or other explicitly non-PII, publicly-safe fields. This is a Tier-1 change: adding any field to what P-1 writes into `snapshot` requires the same scrutiny as touching PII handling directly, because L-2's whitelist (a Prisma `select`) cannot filter inside a JSON column — L-2's public-safety guarantee is only as good as what P-1 puts in this field.
+**Reason:** found during the Link+Render CTO review — the existing safeguard was a comment in the file that READS `snapshot` (`links.service.ts`), not the file that WRITES it (`callbacks.service.ts`), so a future edit to P-1 could add a PII field without anyone seeing the warning that mattered. Enforced by a test (see B-1 prep), not just this doc entry, since a comment doesn't fail a build.

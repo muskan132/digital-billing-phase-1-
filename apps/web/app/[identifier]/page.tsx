@@ -47,9 +47,10 @@ export default async function BillPage({ params }: { params: Promise<{ identifie
     // Each identifier is unique bill content — never serve a cached response.
     response = await fetch(`${API_BASE_URL}/v1/links/${encodeURIComponent(identifier)}`, {
       cache: 'no-store',
+      signal: AbortSignal.timeout(5000),
     });
   } catch {
-    // Network error reaching the API — not the customer's fault, don't leak details.
+    // Network error or timeout reaching the API — not the customer's fault, don't leak details.
     return <ErrorState />;
   }
 
