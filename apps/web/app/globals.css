@@ -57,12 +57,13 @@ body {
   color: var(--semantic-error);
 }
 
-.btn-download {
+.btn-download,
+.btn-share {
   display: flex;
   align-items: center;
   gap: 8px;
   max-width: 480px;
-  margin: 0 auto 24px;
+  margin: 0 auto 12px;
   padding: 10px 16px;
   background: var(--primary);
   color: var(--canvas);
@@ -73,9 +74,14 @@ body {
   cursor: pointer;
 }
 
-/* Bill-only PDF output: hide everything except the rendered bill card. */
+.btn-share {
+  margin-bottom: 24px;
+}
+
+/* Bill-only PDF/share output: hide everything except the rendered bill card. */
 @media print {
-  .btn-download {
+  .btn-download,
+  .btn-share {
     display: none;
   }
 }
