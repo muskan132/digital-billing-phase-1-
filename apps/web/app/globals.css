@@ -1,0 +1,58 @@
+/* Tokens from docs/UI_STYLE_v1.md (jpsl-design-system.md) — use these, not arbitrary values. */
+:root {
+  --primary: #df9f3a;
+  --ink: #212529;
+  --slate: #6b6358;
+  --canvas: #ffffff;
+  --surface: #fef7ef;
+  --hairline: #e6e0d4;
+  --semantic-success: #2e7d32;
+  --semantic-error: #c62828;
+}
+
+body {
+  margin: 0;
+  background: var(--canvas);
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 400;
+  line-height: 1.55;
+}
+
+.bill-title {
+  font-size: 28px;
+  font-weight: 600;
+  margin: 0 0 8px;
+}
+
+.bill-card {
+  max-width: 480px;
+  margin: 24px auto;
+  padding: 16px;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+}
+
+.bill-merchant-info {
+  color: var(--slate);
+}
+
+.bill-total {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--hairline);
+}
+
+.bill-footer {
+  margin-top: 12px;
+  color: var(--slate);
+  font-size: 14px;
+}
+
+.bill-error {
+  max-width: 480px;
+  margin: 24px auto;
+  padding: 16px;
+  color: var(--semantic-error);
+}

@@ -31,7 +31,7 @@ export type RenderedBlock =
 // be — silently empty money reads as "nothing to pay" rather than "data problem" to a
 // customer. So unlike other fields, a missing money value gets an explicit visible
 // marker instead of undefined.
-const AMOUNT_UNAVAILABLE = 'Amount unavailable';
+export const AMOUNT_UNAVAILABLE = 'Amount unavailable';
 
 function isKnownBlockType(type: string): type is BlockType {
   return (KNOWN_BLOCK_TYPES as readonly string[]).includes(type);
