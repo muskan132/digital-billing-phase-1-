@@ -1,0 +1,21 @@
+{
+   "acqName": "PayPhi",
+   "aggregatorID": "JP2001xxx60985",
+   "TransmissionDateTime": "20250910123428",
+   "paymentInstId": "4XXX XXXX XXXX 1111",
+   "cardNetwork": "VISA",
+   "customerMobileNo": "9812345678",
+   "customerEmailID": "user@example.com",
+   "paymentSubInstType": "DC",
+   "paymentMode": "Card",
+   "amount": "1.00",
+   "responseCode": "0000",
+   "respDescription": "Transaction successful",
+   "merchantId": "JP2000000007",
+   "merchantTxnNo": "UAT1280835036",
+   "txnID": "7700206148341-DRAIN2",
+   "paymentDateTime": "20250910123438",
+   "paymentID": "82189795538",
+   "oth_charge": false,
+   "secureHash": "3595b006629169409d657a81958e3d67d439b4063c98b1b94a2cbee2c5cd4f48"
+}
