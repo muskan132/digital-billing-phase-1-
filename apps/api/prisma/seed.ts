@@ -5,8 +5,20 @@ const prisma = new PrismaClient();
 const MERCHANT_ID = 'seed-merchant-demo';
 const USER_MERCHANT_ADMIN_ID = 'seed-user-merchant-admin';
 const USER_PLATFORM_ADMIN_ID = 'seed-user-platform-admin';
-const TEMPLATE_RECEIPT_ID = 'seed-template-receipt';
+const TEMPLATE_RECEIPT_MINIMALIST_ID = 'seed-template-receipt';
+const TEMPLATE_RECEIPT_THERMAL_ID = 'seed-template-receipt-thermal';
 const TEMPLATE_TAX_INVOICE_ID = 'seed-template-tax-invoice';
+
+// Both receipt templates share this identical 6-block structure (D-10) — only
+// Template.skeleton differs between them, driving CSS presentation, not content.
+const RECEIPT_LAYOUT_SCHEMA = [
+  { type: 'HEADER', order: 1, props: {} },
+  { type: 'MERCHANT_INFO', order: 2, props: {} },
+  { type: 'ITEMS', order: 3, props: {} },
+  { type: 'TOTAL', order: 4, props: {} },
+  { type: 'PAYMENT_DETAILS', order: 5, props: {} },
+  { type: 'FOOTER', order: 6, props: {} },
+];
 
 async function main() {
   const secretKey = process.env.SECRET_KEY;
@@ -69,28 +81,38 @@ async function main() {
     },
   });
 
-  const receiptTemplateData = {
+  const minimalistReceiptData = {
     merchantId: null,
-    name: 'Default Receipt',
+    name: 'Minimalist Receipt',
     billType: 'RECEIPT' as const,
-    layoutSchema: [
-      { type: 'HEADER', order: 1, props: {} },
-      { type: 'MERCHANT_INFO', order: 2, props: {} },
-      { type: 'ITEMS', order: 3, props: {} },
-      { type: 'TOTAL', order: 4, props: {} },
-      { type: 'FOOTER', order: 5, props: {} },
-    ],
+    skeleton: 'MINIMALIST' as const,
+    layoutSchema: RECEIPT_LAYOUT_SCHEMA,
   };
   await prisma.template.upsert({
-    where: { id: TEMPLATE_RECEIPT_ID },
-    create: { id: TEMPLATE_RECEIPT_ID, ...receiptTemplateData },
-    update: receiptTemplateData,
+    where: { id: TEMPLATE_RECEIPT_MINIMALIST_ID },
+    create: { id: TEMPLATE_RECEIPT_MINIMALIST_ID, ...minimalistReceiptData },
+    update: minimalistReceiptData,
+  });
+
+  const thermalReceiptData = {
+    merchantId: null,
+    name: 'Compact Thermal Receipt',
+    billType: 'RECEIPT' as const,
+    skeleton: 'COMPACT_THERMAL' as const,
+    layoutSchema: RECEIPT_LAYOUT_SCHEMA,
+  };
+  await prisma.template.upsert({
+    where: { id: TEMPLATE_RECEIPT_THERMAL_ID },
+    create: { id: TEMPLATE_RECEIPT_THERMAL_ID, ...thermalReceiptData },
+    update: thermalReceiptData,
   });
 
   const taxInvoiceTemplateData = {
     merchantId: null,
     name: 'Default Tax Invoice',
     billType: 'TAX_INVOICE' as const,
+    // Unreachable in v1 (D-13) — skeleton value is a placeholder, never rendered.
+    skeleton: 'MINIMALIST' as const,
     layoutSchema: [
       { type: 'HEADER', order: 1, props: {} },
       { type: 'MERCHANT_INFO', order: 2, props: {} },
@@ -107,7 +129,7 @@ async function main() {
 
   await prisma.merchant.update({
     where: { id: MERCHANT_ID },
-    data: { defaultTemplateId: TEMPLATE_RECEIPT_ID },
+    data: { defaultTemplateId: TEMPLATE_RECEIPT_MINIMALIST_ID },
   });
 }
 

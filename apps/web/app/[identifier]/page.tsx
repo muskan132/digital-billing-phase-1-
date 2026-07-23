@@ -1,5 +1,5 @@
 import { notFound } from 'next/navigation';
-import { renderTemplate, LayoutBlock, BillSnapshot } from '../../src/render/template-renderer';
+import { renderTemplate, LayoutBlock, BillSnapshot, BillMerchant } from '../../src/render/template-renderer';
 import { BillBlocks } from '../../src/render/BillBlocks';
 import { DownloadButton } from '../../src/render/DownloadButton';
 import { ShareButton } from '../../src/render/ShareButton';
@@ -8,9 +8,9 @@ const API_BASE_URL = process.env.API_BASE_URL ?? 'http://localhost:4000';
 
 interface BillViewPayload {
   identifier: string;
-  merchant: { name: string };
+  merchant: BillMerchant;
   bill: {
-    template: { layoutSchema: LayoutBlock[] };
+    template: { layoutSchema: LayoutBlock[]; skeleton: string };
     snapshot: BillSnapshot;
   };
 }
@@ -75,7 +75,7 @@ export default async function BillPage({ params }: { params: Promise<{ identifie
 
   let blocks;
   try {
-    blocks = renderTemplate(payload.bill.template.layoutSchema, payload.bill.snapshot);
+    blocks = renderTemplate(payload.bill.template.layoutSchema, payload.bill.snapshot, payload.merchant);
   } catch {
     // D-10: renderTemplate throws on an unknown block type — a template data bug,
     // not something to expose to a public unauthenticated page.
@@ -84,7 +84,7 @@ export default async function BillPage({ params }: { params: Promise<{ identifie
 
   return (
     <>
-      <BillBlocks blocks={blocks} />
+      <BillBlocks blocks={blocks} skeleton={payload.bill.template.skeleton} />
       <DownloadButton />
       <ShareButton />
     </>

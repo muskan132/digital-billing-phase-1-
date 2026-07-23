@@ -19,37 +19,6 @@ body {
   line-height: 1.55;
 }
 
-.bill-title {
-  font-size: 28px;
-  font-weight: 600;
-  margin: 0 0 8px;
-}
-
-.bill-card {
-  max-width: 480px;
-  margin: 24px auto;
-  padding: 16px;
-  background: var(--surface);
-  border: 1px solid var(--hairline);
-  border-radius: 12px;
-}
-
-.bill-merchant-info {
-  color: var(--slate);
-}
-
-.bill-total {
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid var(--hairline);
-}
-
-.bill-footer {
-  margin-top: 12px;
-  color: var(--slate);
-  font-size: 14px;
-}
-
 .bill-error {
   max-width: 480px;
   margin: 24px auto;
@@ -57,12 +26,225 @@ body {
   color: var(--semantic-error);
 }
 
+/* ---- Shared bill-card shell — skin-specific rules below override width, type,
+   spacing, and dividers. Both skins are built only from UI_STYLE_v1.md tokens. ---- */
+.bill-card {
+  position: relative;
+  margin: 24px auto;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  color: var(--ink);
+}
+
+.bill-paid-badge {
+  display: inline-block;
+  background: var(--semantic-success);
+  color: var(--canvas);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  border-radius: 999px;
+  padding: 4px 12px;
+}
+
+/* ==================== MINIMALIST skin ==================== */
+.bill-card--minimalist {
+  max-width: 380px;
+  padding: 24px;
+  border-radius: 12px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+.bill-card--minimalist .bill-header {
+  margin-bottom: 16px;
+}
+
+.bill-card--minimalist .bill-merchant-name {
+  font-size: 28px;
+  font-weight: 600;
+  margin: 0 0 4px;
+}
+
+.bill-card--minimalist .bill-receipt-label {
+  margin: 0;
+  color: var(--slate);
+}
+
+.bill-card--minimalist .bill-receipt-number,
+.bill-card--minimalist .bill-ref-secondary {
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
+  color: var(--slate);
+  font-size: 14px;
+  margin: 4px 0 0;
+}
+
+.bill-card--minimalist .bill-header-date {
+  color: var(--slate);
+  font-size: 14px;
+  margin: 4px 0 0;
+}
+
+.bill-card--minimalist .bill-paid-badge {
+  position: absolute;
+  top: 24px;
+  right: 24px;
+}
+
+.bill-card--minimalist .bill-merchant-info,
+.bill-card--minimalist .bill-items,
+.bill-card--minimalist .bill-payment-details,
+.bill-card--minimalist .bill-total,
+.bill-card--minimalist .bill-footer {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--hairline);
+}
+
+.bill-card--minimalist .bill-merchant-info {
+  color: var(--slate);
+}
+
+.bill-card--minimalist .bill-merchant-info p {
+  margin: 0 0 2px;
+}
+
+.bill-card--minimalist .bill-gstin {
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
+}
+
+.bill-card--minimalist .bill-items,
+.bill-card--minimalist .bill-payment-details p {
+  font-variant-numeric: tabular-nums;
+}
+
+.bill-card--minimalist .bill-items {
+  display: flex;
+  justify-content: space-between;
+}
+
+.bill-card--minimalist .bill-payment-details p {
+  margin: 0 0 4px;
+  color: var(--slate);
+}
+
+.bill-card--minimalist .bill-total {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.bill-card--minimalist .bill-total-label {
+  color: var(--slate);
+}
+
+.bill-card--minimalist .bill-amount {
+  font-size: 26px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.bill-card--minimalist .bill-amount-inline {
+  font-variant-numeric: tabular-nums;
+}
+
+.bill-card--minimalist .bill-footer {
+  color: var(--slate);
+  font-size: 14px;
+}
+
+/* ==================== COMPACT_THERMAL skin ==================== */
+.bill-card--thermal {
+  max-width: 300px;
+  padding: 16px;
+  border-radius: 4px;
+  background: var(--canvas);
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.bill-card--thermal .bill-header {
+  text-align: center;
+  margin-bottom: 8px;
+}
+
+.bill-card--thermal .bill-merchant-name {
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: 1.5px;
+  margin: 0 0 4px;
+}
+
+.bill-card--thermal .bill-receipt-label,
+.bill-card--thermal .bill-total-label {
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--slate);
+  margin: 0;
+}
+
+.bill-card--thermal .bill-receipt-number,
+.bill-card--thermal .bill-header-date,
+.bill-card--thermal .bill-ref-secondary {
+  color: var(--slate);
+  margin: 2px 0 0;
+}
+
+.bill-card--thermal .bill-merchant-info,
+.bill-card--thermal .bill-items,
+.bill-card--thermal .bill-payment-details,
+.bill-card--thermal .bill-total,
+.bill-card--thermal .bill-footer {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--hairline);
+}
+
+.bill-card--thermal .bill-merchant-info {
+  text-align: center;
+}
+
+.bill-card--thermal .bill-merchant-info p {
+  margin: 0 0 2px;
+}
+
+.bill-card--thermal .bill-items {
+  display: flex;
+  justify-content: space-between;
+}
+
+.bill-card--thermal .bill-payment-details p {
+  margin: 0 0 2px;
+}
+
+.bill-card--thermal .bill-total {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.bill-card--thermal .bill-amount {
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.bill-card--thermal .bill-footer {
+  font-size: 12px;
+  text-align: center;
+}
+
+.bill-card--thermal .bill-paid-badge {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+}
+
 .btn-download,
 .btn-share {
   display: flex;
   align-items: center;
   gap: 8px;
-  max-width: 480px;
+  max-width: 380px;
   margin: 0 auto 12px;
   padding: 10px 16px;
   background: var(--primary);

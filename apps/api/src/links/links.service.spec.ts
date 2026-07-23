@@ -21,7 +21,7 @@ function makeLinkRow() {
         totalPaise: 100n,
         currency: 'INR',
         snapshot: { merchantName: 'Demo Merchant', amountPaise: '100', currency: 'INR' },
-        template: { name: 'Default Receipt', billType: 'RECEIPT', layoutSchema: [] },
+        template: { name: 'Minimalist Receipt', billType: 'RECEIPT', layoutSchema: [], skeleton: 'MINIMALIST' },
       },
     },
   };
@@ -46,6 +46,16 @@ describe('LinksService.resolve', () => {
       supportEmail: 'support@demo-merchant.test',
       supportPhone: '+91 22 4000 1234',
     });
+  });
+
+  it('includes template.skeleton so the renderer can pick a style', async () => {
+    const findUnique = jest.fn().mockResolvedValue(makeLinkRow());
+    const prisma = { link: { findUnique } } as unknown as PrismaService;
+    const service = new LinksService(prisma);
+
+    const result = await service.resolve('aBc123XYZ0');
+
+    expect(result.bill.template.skeleton).toBe('MINIMALIST');
   });
 
   // L-2's core safety guarantee: adding merchant business fields must never widen the

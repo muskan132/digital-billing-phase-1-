@@ -24,6 +24,7 @@ export interface BillViewDto {
       name: string;
       billType: string;
       layoutSchema: unknown;
+      skeleton: string;
     };
   };
 }
@@ -81,6 +82,7 @@ export class LinksService {
                     name: true,
                     billType: true,
                     layoutSchema: true,
+                    skeleton: true, // layout enum only, not data — safe to whitelist
                   },
                 },
               },

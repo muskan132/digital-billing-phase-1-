@@ -24,6 +24,11 @@ enum BillType {
   TAX_INVOICE
 }
 
+enum TemplateSkeleton {
+  MINIMALIST
+  COMPACT_THERMAL
+}
+
 enum OrderStatus {
   SUCCESS
   NON_SUCCESS
@@ -73,16 +78,17 @@ model User {
 }
 
 model Template {
-  id           String     @id @default(cuid())
+  id           String           @id @default(cuid())
   merchantId   String?
-  merchant     Merchant?  @relation(fields: [merchantId], references: [id])
+  merchant     Merchant?        @relation(fields: [merchantId], references: [id])
   name         String
   billType     BillType
   layoutSchema Json
-  version      Int        @default(1)
+  skeleton     TemplateSkeleton @default(MINIMALIST)
+  version      Int              @default(1)
   bills        Bill[]
-  defaultOf    Merchant[] @relation("MerchantDefault")
-  createdAt    DateTime   @default(now())
+  defaultOf    Merchant[]       @relation("MerchantDefault")
+  createdAt    DateTime         @default(now())
 }
 
 model Order {

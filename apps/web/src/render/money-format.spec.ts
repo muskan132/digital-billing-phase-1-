@@ -1,4 +1,4 @@
-import { formatPaise } from './money-format';
+import { formatPaise, formatMoney } from './money-format';
 import { AMOUNT_UNAVAILABLE } from './template-renderer';
 
 describe('formatPaise', () => {
@@ -18,5 +18,19 @@ describe('formatPaise', () => {
 
   it('passes non-numeric input through unchanged rather than coercing it', () => {
     expect(formatPaise('abc')).toBe('abc');
+  });
+});
+
+describe('formatMoney', () => {
+  it('prefixes the currency symbol for known currencies', () => {
+    expect(formatMoney('100', 'INR')).toBe('₹1.00');
+  });
+
+  it('falls back to the currency code for unknown currencies', () => {
+    expect(formatMoney('100', 'USD')).toBe('USD 1.00');
+  });
+
+  it('passes the AMOUNT_UNAVAILABLE marker through unchanged, without a currency prefix', () => {
+    expect(formatMoney(AMOUNT_UNAVAILABLE, 'INR')).toBe(AMOUNT_UNAVAILABLE);
   });
 });

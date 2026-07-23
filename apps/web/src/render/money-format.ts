@@ -18,3 +18,20 @@ export function formatPaise(paise: string): string {
 
   return `${negative ? '-' : ''}${rupees.toString()}.${remainder}`;
 }
+
+const CURRENCY_SYMBOLS: Record<string, string> = {
+  INR: '₹',
+};
+
+// Prefixes a currency symbol onto formatPaise's output for consistent display across
+// both receipt skins. The AMOUNT_UNAVAILABLE marker is passed through unchanged — it's
+// not a real amount, so it must never gain a currency prefix.
+export function formatMoney(paise: string, currency: string): string {
+  const formatted = formatPaise(paise);
+  if (formatted === AMOUNT_UNAVAILABLE) {
+    return formatted;
+  }
+
+  const symbol = CURRENCY_SYMBOLS[currency] ?? `${currency} `;
+  return `${symbol}${formatted}`;
+}
