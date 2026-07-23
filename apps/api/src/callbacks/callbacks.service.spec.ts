@@ -41,7 +41,57 @@ describe('CallbacksService.persist — Bill.snapshot whitelist', () => {
     const snapshot = upsert.mock.calls[0][0].create.bill.create.snapshot;
 
     expect(Object.keys(snapshot).sort()).toEqual(
-      ['amountPaise', 'currency', 'merchantName', 'paymentDateTime', 'paymentMode'].sort(),
+      [
+        'amountPaise',
+        'currency',
+        'merchantName',
+        'paymentDateTime',
+        'paymentMode',
+        'receiptNumber',
+        'merchantTxnNo',
+        'cardNetwork',
+        'paymentInstId',
+        'respDescription',
+      ].sort(),
     );
+  });
+
+  // D-17: paymentInstId is only known-masked by JioPay for card transactions — for
+  // other payment modes (e.g. UPI) it may carry a customer VPA, which is PII. It must
+  // never be included unless cardNetwork confirms a card transaction.
+  it('nulls out paymentInstId when cardNetwork is absent (non-card payment mode)', async () => {
+    const upsert = jest.fn().mockResolvedValue(undefined);
+    const prisma = {
+      merchant: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'merchant_1',
+          name: 'Test Merchant',
+          defaultChannel: 'EMAIL',
+          defaultTemplate: { id: 'template_1', billType: 'RECEIPT' },
+        }),
+      },
+      order: { upsert },
+    } as unknown as PrismaService;
+
+    const service = new CallbacksService(prisma);
+
+    const callback: JioPayCallbackDto = {
+      txnID: 'txn_2',
+      merchantId: 'JP2000000007',
+      responseCode: '0000',
+      amount: '1.00',
+      merchantTxnNo: 'mtxn_2',
+      paymentID: 'pay_2',
+      paymentMode: 'UPI',
+      paymentDateTime: '20260717120000',
+      customerEmailID: 'customer@example.com',
+      paymentInstId: '9876543210@paytm',
+      // cardNetwork intentionally absent — non-card payment mode
+    };
+
+    await service.persist(callback, { raw: true });
+
+    const snapshot = upsert.mock.calls[0][0].create.bill.create.snapshot;
+    expect(snapshot.paymentInstId).toBeNull();
   });
 });

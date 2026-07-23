@@ -114,6 +114,17 @@ export class CallbacksService {
               currency: 'INR',
               paymentMode: callback.paymentMode ?? null,
               paymentDateTime: callback.paymentDateTime ?? null,
+              receiptNumber: callback.txnID ?? null,
+              merchantTxnNo: callback.merchantTxnNo ?? null,
+              cardNetwork: callback.cardNetwork ?? null,
+              // D-17: paymentInstId is only known to be pre-masked by JioPay for card
+              // transactions (e.g. "4XXX XXXX XXXX 1111") — for other payment modes
+              // (e.g. UPI) this field may carry the customer's VPA, which is personal
+              // data. Only include it when cardNetwork confirms a card transaction;
+              // otherwise store null rather than risk leaking identifying data to the
+              // public bill-view page.
+              paymentInstId: callback.cardNetwork ? (callback.paymentInstId ?? null) : null,
+              respDescription: callback.respDescription ?? null,
             },
           },
         },
