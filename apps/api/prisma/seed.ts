@@ -19,6 +19,15 @@ async function main() {
     name: 'Demo Merchant',
     secretKeyEnc: Buffer.from(secretKey, 'utf-8'),
     defaultChannel: 'EMAIL' as const,
+    // Demo data only — real values will come from the merchant-onboarding system later.
+    addressLine1: '221, Linking Road',
+    addressLine2: 'Bandra West',
+    city: 'Mumbai',
+    state: 'Maharashtra',
+    pincode: '400050',
+    gstin: '27ABCDE1234F1Z5',
+    supportEmail: 'support@demo-merchant.test',
+    supportPhone: '+91 22 4000 1234',
   };
   await prisma.merchant.upsert({
     where: { id: MERCHANT_ID },

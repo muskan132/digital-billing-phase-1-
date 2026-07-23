@@ -6,6 +6,14 @@ export interface BillViewDto {
   identifier: string;
   merchant: {
     name: string;
+    addressLine1: string | null;
+    addressLine2: string | null;
+    city: string | null;
+    state: string | null;
+    pincode: string | null;
+    gstin: string | null;
+    supportEmail: string | null;
+    supportPhone: string | null;
   };
   bill: {
     billType: string;
@@ -40,7 +48,23 @@ export class LinksService {
         identifier: true,
         order: {
           select: {
-            merchant: { select: { name: true } },
+            merchant: {
+              // Merchant business details — the equivalent of what's printed on any
+              // shop receipt (address/GSTIN/support contact), not customer PII. Safe
+              // for this public unauth page. Explicit field list, no wildcard select —
+              // do not widen this to include anything else on Merchant.
+              select: {
+                name: true,
+                addressLine1: true,
+                addressLine2: true,
+                city: true,
+                state: true,
+                pincode: true,
+                gstin: true,
+                supportEmail: true,
+                supportPhone: true,
+              },
+            },
             // No status check here: P-1 only ever reaches the `link: { create }`
             // nested-write branch inside the SUCCESS upsert — every other exit path
             // (NON_SUCCESS, missing txnId, D-15 unparseable amount, D-14a missing
@@ -74,7 +98,17 @@ export class LinksService {
 
     return {
       identifier: link.identifier,
-      merchant: { name: link.order.merchant.name },
+      merchant: {
+        name: link.order.merchant.name,
+        addressLine1: link.order.merchant.addressLine1,
+        addressLine2: link.order.merchant.addressLine2,
+        city: link.order.merchant.city,
+        state: link.order.merchant.state,
+        pincode: link.order.merchant.pincode,
+        gstin: link.order.merchant.gstin,
+        supportEmail: link.order.merchant.supportEmail,
+        supportPhone: link.order.merchant.supportPhone,
+      },
       bill: {
         billType: bill.billType,
         totalPaise: bill.totalPaise.toString(),

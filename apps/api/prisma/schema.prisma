@@ -51,6 +51,14 @@ model Merchant {
   defaultChannel    Channel    @default(EMAIL)
   defaultTemplateId String?
   defaultTemplate   Template?  @relation("MerchantDefault", fields: [defaultTemplateId], references: [id])
+  addressLine1      String?
+  addressLine2      String?
+  city              String?
+  state             String?
+  pincode           String?
+  gstin             String?
+  supportEmail      String?
+  supportPhone      String?
   createdAt         DateTime   @default(now())
 }
 
