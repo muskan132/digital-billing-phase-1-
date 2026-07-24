@@ -148,6 +148,7 @@ model Broadcast {
   attempts  Int             @default(0)
   error     String?
   createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
   sentAt    DateTime?
 
   @@index([status, createdAt])

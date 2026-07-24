@@ -7,6 +7,7 @@
     "start": "nest start",
     "start:dev": "nest start --watch",
     "sign-fixture": "ts-node scripts/sign-fixture.ts",
+    "demo": "ts-node scripts/demo.ts",
     "test": "jest"
   },
   "dependencies": {
