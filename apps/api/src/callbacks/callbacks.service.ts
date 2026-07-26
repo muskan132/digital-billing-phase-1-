@@ -104,6 +104,7 @@ export class CallbacksService {
         amountPaise,
         bill: {
           create: {
+            merchantId: merchant.id,
             billType: merchant.defaultTemplate.billType,
             templateId: merchant.defaultTemplate.id,
             totalPaise: amountPaise,

@@ -45,6 +45,16 @@ enum BroadcastStatus {
   FAILED
 }
 
+enum OrderSource {
+  PG_CALLBACK
+  DIRECT_API
+}
+
+enum ApiKeyStatus {
+  ACTIVE
+  REVOKED
+}
+
 model Merchant {
   id                String     @id @default(cuid())
   jiopayMid         String     @unique
@@ -64,6 +74,8 @@ model Merchant {
   gstin             String?
   supportEmail      String?
   supportPhone      String?
+  apiKeys           MerchantApiKey[]
+  bills             Bill[]
   createdAt         DateTime   @default(now())
 }
 
@@ -92,42 +104,82 @@ model Template {
 }
 
 model Order {
-  id                 String      @id @default(cuid())
-  merchantId         String
-  merchant           Merchant    @relation(fields: [merchantId], references: [id])
-  idempotencyKey     String?
-  merchantTxnNo      String
-  paymentId          String
-  txnId              String      @unique
-  amountPaise        BigInt?
-  currency           String      @default("INR")
-  responseCode       String
-  paymentMode        String?
-  paymentDateTime    String?
-  status             OrderStatus
-  customerMobile_pii String?
-  customerEmail_pii  String?
-  rawCallback        Json
-  bill               Bill?
-  link               Link?
-  broadcasts         Broadcast[]
-  createdAt          DateTime    @default(now())
+  id                     String      @id @default(cuid())
+  merchantId             String
+  merchant               Merchant    @relation(fields: [merchantId], references: [id])
+  idempotencyKey         String?
+  merchantTxnNo          String?
+  paymentId              String?
+  txnId                  String?     @unique
+  externalTransactionId  String?     @unique
+  source                 OrderSource @default(PG_CALLBACK)
+  saleAt                 DateTime?
+  amountPaise            BigInt?
+  currency               String      @default("INR")
+  responseCode           String?
+  paymentMode            String?
+  paymentDateTime        String?
+  status                 OrderStatus
+  customerMobile_pii     String?
+  customerEmail_pii      String?
+  rawCallback            Json
+  bill                   Bill?
+  items                  OrderItem[]
+  link                   Link?
+  broadcasts             Broadcast[]
+  createdAt              DateTime    @default(now())
 
   @@index([merchantId])
 }
 
+model OrderItem {
+  id                     String   @id @default(cuid())
+  orderId                String
+  order                  Order    @relation(fields: [orderId], references: [id])
+  lineNo                 Int
+  name                   String
+  hsn                    String
+  uom                    String
+  quantity               Int
+  unitPricePaise         BigInt
+  itemDiscountPaise      BigInt
+  billDiscountAllocPaise BigInt
+  taxRateBp              Int
+  taxableValuePaise      BigInt
+  taxPaise               BigInt
+  cgstPaise              BigInt
+  sgstPaise              BigInt
+  igstPaise              BigInt
+  createdAt              DateTime @default(now())
+
+  @@index([orderId])
+}
+
 model Bill {
-  id          String   @id @default(cuid())
-  orderId     String   @unique
-  order       Order    @relation(fields: [orderId], references: [id])
-  billType    BillType
-  templateId  String
-  template    Template @relation(fields: [templateId], references: [id])
-  totalPaise  BigInt
-  currency    String   @default("INR")
-  snapshot    Json
-  artifactVer Int      @default(1)
-  createdAt   DateTime @default(now())
+  id             String   @id @default(cuid())
+  orderId        String   @unique
+  order          Order    @relation(fields: [orderId], references: [id])
+  merchantId     String
+  merchant       Merchant @relation(fields: [merchantId], references: [id])
+  billType       BillType
+  templateId     String
+  template       Template @relation(fields: [templateId], references: [id])
+  totalPaise     BigInt
+  currency       String   @default("INR")
+  invoiceNumber  String?
+  subtotalPaise  BigInt?
+  discountPaise  BigInt?
+  taxPaise       BigInt?
+  cgstPaise      BigInt?
+  sgstPaise      BigInt?
+  igstPaise      BigInt?
+  placeOfSupply  String?
+  merchantGstin  String?
+  snapshot       Json
+  artifactVer    Int      @default(1)
+  createdAt      DateTime @default(now())
+
+  @@unique([merchantId, invoiceNumber])
 }
 
 model Link {
@@ -136,6 +188,18 @@ model Link {
   orderId    String   @unique
   order      Order    @relation(fields: [orderId], references: [id])
   createdAt  DateTime @default(now())
+}
+
+model MerchantApiKey {
+  id         String       @id @default(cuid())
+  merchantId String
+  merchant   Merchant     @relation(fields: [merchantId], references: [id])
+  keyPrefix  String       @unique
+  keyHash    Bytes
+  status     ApiKeyStatus @default(ACTIVE)
+  createdAt  DateTime     @default(now())
+
+  @@index([merchantId])
 }
 
 model Broadcast {
