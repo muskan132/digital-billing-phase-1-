@@ -27,6 +27,7 @@ enum BillType {
 enum TemplateSkeleton {
   MINIMALIST
   COMPACT_THERMAL
+  TAX_COMPLIANT
 }
 
 enum OrderStatus {
@@ -72,6 +73,7 @@ model Merchant {
   state             String?
   pincode           String?
   gstin             String?
+  gstStateCode      String?
   supportEmail      String?
   supportPhone      String?
   apiKeys           MerchantApiKey[]

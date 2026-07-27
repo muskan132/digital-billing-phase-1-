@@ -1,3 +1,6 @@
+import * as fs from 'fs';
+import * as path from 'path';
+import { createHash, randomBytes } from 'crypto';
 import { PrismaClient } from '@prisma/client';
 
 const prisma = new PrismaClient();
@@ -8,6 +11,8 @@ const USER_PLATFORM_ADMIN_ID = 'seed-user-platform-admin';
 const TEMPLATE_RECEIPT_MINIMALIST_ID = 'seed-template-receipt';
 const TEMPLATE_RECEIPT_THERMAL_ID = 'seed-template-receipt-thermal';
 const TEMPLATE_TAX_INVOICE_ID = 'seed-template-tax-invoice';
+const MERCHANT_API_KEY_ID = 'seed-merchant-api-key-demo';
+const DEMO_API_KEY_FILE = path.join(__dirname, '..', '.demo-api-key.local');
 
 // Both receipt templates share this identical 6-block structure (D-10) — only
 // Template.skeleton differs between them, driving CSS presentation, not content.
@@ -38,9 +43,17 @@ async function main() {
     state: 'Maharashtra',
     pincode: '400050',
     gstin: '27ABCDE1234F1Z5',
+    // D-25: gstStateCode is the 2-digit GST place-of-supply code, distinct from `state`
+    // (the receipt's display name, e.g. "Maharashtra") — must equal gstin[0:2].
+    gstStateCode: '27',
     supportEmail: 'support@demo-merchant.test',
     supportPhone: '+91 22 4000 1234',
   };
+  if (merchantData.gstStateCode !== merchantData.gstin.slice(0, 2)) {
+    throw new Error(
+      `Seed data error: Merchant.gstStateCode ("${merchantData.gstStateCode}") must equal gstin[0:2] ("${merchantData.gstin.slice(0, 2)}") per D-25`,
+    );
+  }
   await prisma.merchant.upsert({
     where: { id: MERCHANT_ID },
     create: { id: MERCHANT_ID, ...merchantData },
@@ -109,10 +122,12 @@ async function main() {
 
   const taxInvoiceTemplateData = {
     merchantId: null,
-    name: 'Default Tax Invoice',
+    name: 'Tax Invoice (TAX_COMPLIANT)',
     billType: 'TAX_INVOICE' as const,
-    // Unreachable in v1 (D-13) — skeleton value is a placeholder, never rendered.
-    skeleton: 'MINIMALIST' as const,
+    skeleton: 'TAX_COMPLIANT' as const,
+    // Placeholder layoutSchema on today's valid D-10 block set (no TAX_SUMMARY yet —
+    // that block type and this template's real itemized layout are T-2's job, a later
+    // roadmap task). Still unreachable via P-1 (D-13) until direct-API P-2 lands.
     layoutSchema: [
       { type: 'HEADER', order: 1, props: {} },
       { type: 'MERCHANT_INFO', order: 2, props: {} },
@@ -131,6 +146,32 @@ async function main() {
     where: { id: MERCHANT_ID },
     data: { defaultTemplateId: TEMPLATE_RECEIPT_MINIMALIST_ID },
   });
+
+  // D-19: MerchantApiKey — keyPrefix plaintext for lookup, keyHash = SHA-256 of the full
+  // key. Written once: if this row already exists, the plaintext is gone for good (by
+  // design — it's never stored), so we skip regeneration rather than silently rotating
+  // a key every reseed and invalidating whatever the demo/test setup already has.
+  const existingApiKey = await prisma.merchantApiKey.findUnique({ where: { id: MERCHANT_API_KEY_ID } });
+  if (existingApiKey) {
+    console.log('MerchantApiKey already provisioned — skipping (plaintext was written once, on first seed).');
+  } else {
+    const plaintextKey = randomBytes(32).toString('hex');
+    const keyPrefix = plaintextKey.slice(0, 8);
+    const keyHash = createHash('sha256').update(plaintextKey).digest();
+
+    await prisma.merchantApiKey.create({
+      data: {
+        id: MERCHANT_API_KEY_ID,
+        merchantId: MERCHANT_ID,
+        keyPrefix,
+        keyHash,
+        status: 'ACTIVE',
+      },
+    });
+
+    fs.writeFileSync(DEMO_API_KEY_FILE, plaintextKey + '\n', { mode: 0o600 });
+    console.log(`MerchantApiKey provisioned — plaintext written to ${DEMO_API_KEY_FILE} (gitignored, never logged).`);
+  }
 }
 
 main()
