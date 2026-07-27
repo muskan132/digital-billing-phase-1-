@@ -5,9 +5,10 @@ import { CallbacksModule } from './callbacks/callbacks.module';
 import { LinksModule } from './links/links.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { BroadcastModule } from './broadcast/broadcast.module';
+import { BillsModule } from './bills/bills.module';
 
 @Module({
-  imports: [ScheduleModule.forRoot(), PrismaModule, CallbacksModule, LinksModule, BroadcastModule],
+  imports: [ScheduleModule.forRoot(), PrismaModule, CallbacksModule, LinksModule, BroadcastModule, BillsModule],
   controllers: [HealthController],
 })
 export class AppModule {}
