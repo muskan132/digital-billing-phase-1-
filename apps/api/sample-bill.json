@@ -1,0 +1,53 @@
+{
+  "external_transaction_id": "sample-ext-txn-001",
+  "invoice_number": "INV-2026-0001",
+  "place_of_supply": "27",
+  "currency": "INR",
+  "sale_at": "2026-07-28T10:30:00Z",
+  "merchant_id": "seed-merchant-demo",
+  "line_items": [
+    {
+      "line_no": 1,
+      "name": "Wireless Mouse",
+      "hsn": "8471",
+      "uom": "NOS",
+      "quantity": 2,
+      "unit_price_paise": "10000",
+      "item_discount_paise": "0",
+      "tax_rate_bp": 500,
+      "tax_paise": "1000",
+      "cgst_paise": "500",
+      "sgst_paise": "500",
+      "igst_paise": "0"
+    },
+    {
+      "line_no": 2,
+      "name": "USB-C Cable",
+      "hsn": "8544",
+      "uom": "NOS",
+      "quantity": 1,
+      "unit_price_paise": "5000",
+      "item_discount_paise": "0",
+      "tax_rate_bp": 1800,
+      "tax_paise": "900",
+      "cgst_paise": "450",
+      "sgst_paise": "450",
+      "igst_paise": "0"
+    }
+  ],
+  "totals": {
+    "subtotal_paise": "25000",
+    "bill_discount_paise": "0",
+    "discount_paise": "0",
+    "tax_paise": "1900",
+    "total_paise": "26900"
+  },
+  "tax_block": {
+    "cgst_paise": "950",
+    "sgst_paise": "950",
+    "igst_paise": "0"
+  },
+  "contact": {
+    "email": "customer@example.com"
+  }
+}
