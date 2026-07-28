@@ -2,6 +2,23 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { IDENTIFIER_PATTERN } from '../common/link-id.util';
 
+export interface BillViewLineItem {
+  lineNo: number;
+  name: string;
+  hsn: string;
+  uom: string;
+  quantity: number;
+  unitPricePaise: string;
+  itemDiscountPaise: string;
+  billDiscountAllocPaise: string;
+  taxRateBp: number;
+  taxableValuePaise: string;
+  taxPaise: string;
+  cgstPaise: string;
+  sgstPaise: string;
+  igstPaise: string;
+}
+
 export interface BillViewDto {
   identifier: string;
   merchant: {
@@ -20,6 +37,17 @@ export interface BillViewDto {
     totalPaise: string;
     currency: string;
     snapshot: unknown;
+    // v2 (L-3, D-28): null for RECEIPT bills, populated for TAX_INVOICE.
+    invoiceNumber: string | null;
+    subtotalPaise: string | null;
+    discountPaise: string | null;
+    taxPaise: string | null;
+    cgstPaise: string | null;
+    sgstPaise: string | null;
+    igstPaise: string | null;
+    placeOfSupply: string | null;
+    merchantGstin: string | null;
+    items: BillViewLineItem[];
     template: {
       name: string;
       billType: string;
@@ -77,6 +105,17 @@ export class LinksService {
                 totalPaise: true,
                 currency: true,
                 snapshot: true,
+                // v2 (L-3, D-28): TAX_INVOICE GST/invoice fields. Explicit field list —
+                // do not widen this to a wildcard select.
+                invoiceNumber: true,
+                subtotalPaise: true,
+                discountPaise: true,
+                taxPaise: true,
+                cgstPaise: true,
+                sgstPaise: true,
+                igstPaise: true,
+                placeOfSupply: true,
+                merchantGstin: true,
                 template: {
                   select: {
                     name: true,
@@ -86,6 +125,28 @@ export class LinksService {
                   },
                 },
               },
+            },
+            // v2 (L-3, D-28): line items, whitelisted to exactly the D-28 items[]
+            // member shape — id/orderId/createdAt are internal/audit-only and must
+            // never be selected here.
+            items: {
+              select: {
+                lineNo: true,
+                name: true,
+                hsn: true,
+                uom: true,
+                quantity: true,
+                unitPricePaise: true,
+                itemDiscountPaise: true,
+                billDiscountAllocPaise: true,
+                taxRateBp: true,
+                taxableValuePaise: true,
+                taxPaise: true,
+                cgstPaise: true,
+                sgstPaise: true,
+                igstPaise: true,
+              },
+              orderBy: { lineNo: 'asc' },
             },
           },
         },
@@ -116,6 +177,31 @@ export class LinksService {
         totalPaise: bill.totalPaise.toString(),
         currency: bill.currency,
         snapshot: bill.snapshot,
+        invoiceNumber: bill.invoiceNumber,
+        subtotalPaise: bill.subtotalPaise?.toString() ?? null,
+        discountPaise: bill.discountPaise?.toString() ?? null,
+        taxPaise: bill.taxPaise?.toString() ?? null,
+        cgstPaise: bill.cgstPaise?.toString() ?? null,
+        sgstPaise: bill.sgstPaise?.toString() ?? null,
+        igstPaise: bill.igstPaise?.toString() ?? null,
+        placeOfSupply: bill.placeOfSupply,
+        merchantGstin: bill.merchantGstin,
+        items: link.order.items.map((item) => ({
+          lineNo: item.lineNo,
+          name: item.name,
+          hsn: item.hsn,
+          uom: item.uom,
+          quantity: item.quantity,
+          unitPricePaise: item.unitPricePaise.toString(),
+          itemDiscountPaise: item.itemDiscountPaise.toString(),
+          billDiscountAllocPaise: item.billDiscountAllocPaise.toString(),
+          taxRateBp: item.taxRateBp,
+          taxableValuePaise: item.taxableValuePaise.toString(),
+          taxPaise: item.taxPaise.toString(),
+          cgstPaise: item.cgstPaise.toString(),
+          sgstPaise: item.sgstPaise.toString(),
+          igstPaise: item.igstPaise.toString(),
+        })),
         template: bill.template,
       },
     };
