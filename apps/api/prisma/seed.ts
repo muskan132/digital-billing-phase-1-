@@ -125,15 +125,17 @@ async function main() {
     name: 'Tax Invoice (TAX_COMPLIANT)',
     billType: 'TAX_INVOICE' as const,
     skeleton: 'TAX_COMPLIANT' as const,
-    // Placeholder layoutSchema on today's valid D-10 block set (no TAX_SUMMARY yet —
-    // that block type and this template's real itemized layout are T-2's job, a later
-    // roadmap task). Still unreachable via P-1 (D-13) until direct-API P-2 lands.
+    // T-2: TAX_SUMMARY added to the block-type enum (D-10) and to this layout, between
+    // ITEMS and TOTAL. TAX_SUMMARY renders nothing yet — the real CGST/SGST/IGST-by-rate
+    // breakdown is V-5's job, once L-3 exposes items[] data to the renderer. The
+    // itemized ITEMS layout itself is also still V-5's job, not this one.
     layoutSchema: [
       { type: 'HEADER', order: 1, props: {} },
       { type: 'MERCHANT_INFO', order: 2, props: {} },
       { type: 'ITEMS', order: 3, props: {} },
-      { type: 'TOTAL', order: 4, props: {} },
-      { type: 'FOOTER', order: 5, props: {} },
+      { type: 'TAX_SUMMARY', order: 4, props: {} },
+      { type: 'TOTAL', order: 5, props: {} },
+      { type: 'FOOTER', order: 6, props: {} },
     ],
   };
   await prisma.template.upsert({

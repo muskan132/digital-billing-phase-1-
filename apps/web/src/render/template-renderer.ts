@@ -2,7 +2,7 @@ import { formatCallbackDateTime } from './date-format';
 
 // Block-type enum per D-10 (docs/DECISIONS_v1.md) — the only valid layoutSchema block
 // types for v1. Expected to grow further (COUPON, SURVEY, MARKETING per the FSD).
-const KNOWN_BLOCK_TYPES = ['HEADER', 'MERCHANT_INFO', 'ITEMS', 'PAYMENT_DETAILS', 'TOTAL', 'FOOTER'] as const;
+const KNOWN_BLOCK_TYPES = ['HEADER', 'MERCHANT_INFO', 'ITEMS', 'PAYMENT_DETAILS', 'TAX_SUMMARY', 'TOTAL', 'FOOTER'] as const;
 type BlockType = (typeof KNOWN_BLOCK_TYPES)[number];
 
 export interface LayoutBlock {
@@ -69,6 +69,10 @@ export type RenderedBlock =
       paymentInstId: string | null | undefined;
       merchantTxnNo: string | null | undefined;
     }
+  // No props yet — the CGST/SGST/IGST-by-rate breakdown needs items[] data that only
+  // reaches the renderer once L-3 exposes it; V-5 owns the real content (T-2 only
+  // makes TAX_SUMMARY a recognized, non-throwing block type).
+  | { type: 'TAX_SUMMARY' }
   | { type: 'TOTAL'; totalPaise: string; currency: string }
   | {
       type: 'FOOTER';
@@ -128,6 +132,8 @@ function renderBlock(block: LayoutBlock, snapshot: BillSnapshot, merchant: BillM
         paymentInstId: snapshot.paymentInstId,
         merchantTxnNo: snapshot.merchantTxnNo,
       };
+    case 'TAX_SUMMARY':
+      return { type: 'TAX_SUMMARY' };
     case 'TOTAL':
       return { type: 'TOTAL', ...renderMoneyFields(snapshot) };
     case 'FOOTER':

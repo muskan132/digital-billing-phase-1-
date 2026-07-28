@@ -75,6 +75,10 @@ function BillBlock({ block }: { block: RenderedBlock }) {
       );
     }
 
+    case 'TAX_SUMMARY':
+      // V-5 owns the real CGST/SGST/IGST-by-rate breakdown — nothing to render yet.
+      return null;
+
     case 'TOTAL':
       return (
         <div className="bill-total">

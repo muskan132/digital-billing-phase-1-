@@ -10,6 +10,18 @@ const SEEDED_LAYOUT_SCHEMA: LayoutBlock[] = [
   { type: 'FOOTER', order: 6, props: {} },
 ];
 
+// Mirrors apps/api/prisma/seed.ts's taxInvoiceTemplateData.layoutSchema (T-2). No
+// shared source between the two packages — kept in sync by hand; see the "known gap"
+// noted in T-2's summary about a possible future shared-constants/runtime check.
+const SEEDED_TAX_COMPLIANT_LAYOUT_SCHEMA: LayoutBlock[] = [
+  { type: 'HEADER', order: 1, props: {} },
+  { type: 'MERCHANT_INFO', order: 2, props: {} },
+  { type: 'ITEMS', order: 3, props: {} },
+  { type: 'TAX_SUMMARY', order: 4, props: {} },
+  { type: 'TOTAL', order: 5, props: {} },
+  { type: 'FOOTER', order: 6, props: {} },
+];
+
 // Mirrors the snapshot shape apps/api/src/callbacks/callbacks.service.ts (P-1) writes.
 const SAMPLE_SNAPSHOT: BillSnapshot = {
   merchantName: 'Demo Merchant',
@@ -128,5 +140,17 @@ describe('renderTemplate', () => {
     const invalidSchema = [{ type: 'BOGUS', order: 1, props: {} }] as LayoutBlock[];
 
     expect(() => renderTemplate(invalidSchema, SAMPLE_SNAPSHOT, SAMPLE_MERCHANT)).toThrow(/Unknown block type/);
+  });
+
+  it('renders TAX_SUMMARY as a recognized, content-less block without throwing (T-2; real content is V-5)', () => {
+    const result = renderTemplate([{ type: 'TAX_SUMMARY', order: 1, props: {} }], SAMPLE_SNAPSHOT, SAMPLE_MERCHANT);
+
+    expect(result).toEqual([{ type: 'TAX_SUMMARY' }]);
+  });
+
+  it('renders the seeded TAX_COMPLIANT layoutSchema (T-2) end-to-end without throwing', () => {
+    const result = renderTemplate(SEEDED_TAX_COMPLIANT_LAYOUT_SCHEMA, SAMPLE_SNAPSHOT, SAMPLE_MERCHANT);
+
+    expect(result.map((block) => block.type)).toEqual(['HEADER', 'MERCHANT_INFO', 'ITEMS', 'TAX_SUMMARY', 'TOTAL', 'FOOTER']);
   });
 });
