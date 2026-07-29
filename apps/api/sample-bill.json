@@ -1,6 +1,6 @@
 {
-  "external_transaction_id": "sample-ext-txn-001",
-  "invoice_number": "INV-2026-0001",
+  "external_transaction_id": "sample-ext-txn-001-test3",
+  "invoice_number": "INV-2026-0003",
   "place_of_supply": "27",
   "currency": "INR",
   "sale_at": "2026-07-28T10:30:00Z",

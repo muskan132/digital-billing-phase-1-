@@ -22,6 +22,9 @@ const SHARED_TAX_TEMPLATE = {
   id: 'tpl-shared-tax',
   merchantId: null,
   billType: 'TAX_INVOICE',
+  skeleton: 'TAX_COMPLIANT',
+  layoutSchema: [{ type: 'HEADER', order: 1, props: {} }],
+  version: 1,
   createdAt: new Date('2026-01-01T00:00:00Z'),
 };
 
@@ -116,6 +119,22 @@ describe('BillsService.createBill', () => {
     expect(call.create.broadcasts.create).toEqual([
       { channel: 'EMAIL', recipient: 'jane@example.com', status: 'PENDING' },
     ]);
+  });
+
+  // TEMPLATE_SYSTEM_v2 §7: the resolved template's render spec must be frozen onto
+  // the bill at creation, independent of the live Template row afterward.
+  it('freezes the resolved template render spec into Bill.layoutSnapshot at creation', async () => {
+    const dto = validDto();
+    await service.createBill(dto, MERCHANT_A.id);
+
+    const call = orderUpsert.mock.calls[0][0];
+    expect(call.create.bill.create.layoutSnapshot).toEqual({
+      schemaVersion: 1,
+      skeleton: SHARED_TAX_TEMPLATE.skeleton,
+      blocks: SHARED_TAX_TEMPLATE.layoutSchema,
+      templateId: SHARED_TAX_TEMPLATE.id,
+      templateVersion: SHARED_TAX_TEMPLATE.version,
+    });
   });
 
   it('D-12: omits the Broadcast relation entirely when no contact is supplied, but still creates Bill/Link', async () => {

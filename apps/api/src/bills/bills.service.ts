@@ -235,6 +235,16 @@ export class BillsService {
               placeOfSupply: dto.place_of_supply,
               merchantGstin: merchant.gstin,
               snapshot,
+              // TEMPLATE_SYSTEM_v2 §7: freeze the resolved template's render spec onto
+              // the bill at creation. The renderer must read only this, never the live
+              // template — editing a template must never change how an issued bill renders.
+              layoutSnapshot: {
+                schemaVersion: 1,
+                skeleton: template.skeleton,
+                blocks: template.layoutSchema as Prisma.InputJsonValue,
+                templateId: template.id,
+                templateVersion: template.version,
+              },
             },
           },
           link: { create: { identifier: generateIdentifier() } },

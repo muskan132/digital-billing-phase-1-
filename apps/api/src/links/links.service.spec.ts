@@ -30,7 +30,13 @@ function makeLinkRow() {
         igstPaise: null,
         placeOfSupply: null,
         merchantGstin: null,
-        template: { name: 'Minimalist Receipt', billType: 'RECEIPT', layoutSchema: [], skeleton: 'MINIMALIST' },
+        layoutSnapshot: {
+          schemaVersion: 1,
+          skeleton: 'MINIMALIST',
+          blocks: [{ type: 'HEADER', order: 1, props: {} }],
+          templateId: 'seed-template-receipt',
+          templateVersion: 1,
+        },
       },
       items: [],
     },
@@ -66,7 +72,13 @@ function makeTaxInvoiceLinkRow() {
         igstPaise: 0n,
         placeOfSupply: '27',
         merchantGstin: '27ABCDE1234F1Z5',
-        template: { name: 'Tax Invoice (TAX_COMPLIANT)', billType: 'TAX_INVOICE', layoutSchema: [], skeleton: 'TAX_COMPLIANT' },
+        layoutSnapshot: {
+          schemaVersion: 1,
+          skeleton: 'TAX_COMPLIANT',
+          blocks: [{ type: 'HEADER', order: 1, props: {} }],
+          templateId: 'seed-template-tax-invoice',
+          templateVersion: 1,
+        },
       },
       items: [
         {
@@ -121,7 +133,7 @@ const ALLOWED_BILL_KEYS = [
   'placeOfSupply',
   'merchantGstin',
   'items',
-  'template',
+  'layoutSnapshot',
 ].sort();
 
 const ALLOWED_ITEM_KEYS = [
@@ -162,14 +174,29 @@ describe('LinksService.resolve', () => {
     });
   });
 
-  it('includes template.skeleton so the renderer can pick a style', async () => {
+  it('includes layoutSnapshot.skeleton so the renderer can pick a style', async () => {
     const findUnique = jest.fn().mockResolvedValue(makeLinkRow());
     const prisma = { link: { findUnique } } as unknown as PrismaService;
     const service = new LinksService(prisma);
 
     const result = await service.resolve('aBc123XYZ0');
 
-    expect(result.bill.template.skeleton).toBe('MINIMALIST');
+    expect((result.bill.layoutSnapshot as { skeleton: string }).skeleton).toBe('MINIMALIST');
+  });
+
+  // TEMPLATE_SYSTEM_v2 §7: the live `template` relation must never be selected for
+  // layout purposes again — that join is exactly the bug §7 fixes. A structural check,
+  // not just "the DTO happens not to show it": the query itself must never ask for it.
+  it('never selects the live template relation — layout comes from layoutSnapshot only', async () => {
+    const findUnique = jest.fn().mockResolvedValue(makeLinkRow());
+    const prisma = { link: { findUnique } } as unknown as PrismaService;
+    const service = new LinksService(prisma);
+
+    await service.resolve('aBc123XYZ0');
+
+    const billSelect = findUnique.mock.calls[0][0].select.order.select.bill.select;
+    expect(billSelect).not.toHaveProperty('template');
+    expect(billSelect).toHaveProperty('layoutSnapshot', true);
   });
 
   // A receipt identifier must still resolve exactly as it did before L-3: the new v2
@@ -196,7 +223,13 @@ describe('LinksService.resolve', () => {
       placeOfSupply: null,
       merchantGstin: null,
       items: [],
-      template: { name: 'Minimalist Receipt', billType: 'RECEIPT', layoutSchema: [], skeleton: 'MINIMALIST' },
+      layoutSnapshot: {
+        schemaVersion: 1,
+        skeleton: 'MINIMALIST',
+        blocks: [{ type: 'HEADER', order: 1, props: {} }],
+        templateId: 'seed-template-receipt',
+        templateVersion: 1,
+      },
     });
   });
 

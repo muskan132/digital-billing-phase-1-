@@ -50,15 +50,49 @@ function BillBlock({ block }: { block: RenderedBlock }) {
       );
     }
 
-    case 'ITEMS':
-      // Single row, not an item-by-item breakdown — see the comment on the ITEMS
-      // case in template-renderer.ts for why.
+    case 'ITEMS': {
+      if (block.kind === 'single') {
+        return (
+          <div className="bill-items">
+            <span>Payment received</span>
+            <span className="bill-amount-inline">{formatMoney(block.totalPaise, block.currency)}</span>
+          </div>
+        );
+      }
       return (
-        <div className="bill-items">
-          <span>Payment received</span>
-          <span className="bill-amount-inline">{formatMoney(block.totalPaise, block.currency)}</span>
+        <div className="bill-items-table">
+          <div className="bill-item-row bill-item-row--head">
+            <span>Item</span>
+            <span>HSN</span>
+            <span>UOM</span>
+            <span>Qty</span>
+            <span>Rate</span>
+            <span>Discount</span>
+            <span>Tax %</span>
+            <span>Taxable</span>
+            <span>Tax</span>
+          </div>
+          {block.items.map((item) => (
+            <div className="bill-item-row" key={item.lineNo}>
+              {/* Merchant-supplied free text (D-28's named residual risk) — this safety
+                  depends entirely on JSX's default text-escaping and on never using
+                  dangerouslySetInnerHTML anywhere in this file. Treat that as an
+                  explicit invariant: any future edit introducing dangerouslySetInnerHTML
+                  here reopens an XSS hole on a public unauthenticated page. */}
+              <span>{item.name}</span>
+              <span>{item.hsn}</span>
+              <span>{item.uom}</span>
+              <span>{item.quantity}</span>
+              <span>{formatMoney(item.unitPricePaise, block.currency)}</span>
+              <span>{formatMoney(item.discountPaise, block.currency)}</span>
+              <span>{(item.taxRateBp / 100).toString()}%</span>
+              <span>{formatMoney(item.taxableValuePaise, block.currency)}</span>
+              <span>{formatMoney(item.taxPaise, block.currency)}</span>
+            </div>
+          ))}
         </div>
       );
+    }
 
     case 'PAYMENT_DETAILS': {
       // Card network + masked instrument is one line, omitted entirely when
@@ -75,9 +109,39 @@ function BillBlock({ block }: { block: RenderedBlock }) {
       );
     }
 
-    case 'TAX_SUMMARY':
-      // V-5 owns the real CGST/SGST/IGST-by-rate breakdown — nothing to render yet.
-      return null;
+    case 'TAX_SUMMARY': {
+      if (block.rows.length === 0) return null;
+      return (
+        <div className="bill-tax-summary">
+          <div className="bill-tax-summary-row bill-tax-summary-row--head">
+            <span>Rate</span>
+            <span>Taxable</span>
+            {block.isIntraState ? (
+              <>
+                <span>CGST</span>
+                <span>SGST</span>
+              </>
+            ) : (
+              <span>IGST</span>
+            )}
+          </div>
+          {block.rows.map((row) => (
+            <div className="bill-tax-summary-row" key={row.taxRateBp}>
+              <span>{(row.taxRateBp / 100).toString()}%</span>
+              <span>{formatMoney(row.taxableValuePaise, block.currency)}</span>
+              {block.isIntraState ? (
+                <>
+                  <span>{formatMoney(row.cgstPaise, block.currency)}</span>
+                  <span>{formatMoney(row.sgstPaise, block.currency)}</span>
+                </>
+              ) : (
+                <span>{formatMoney(row.igstPaise, block.currency)}</span>
+              )}
+            </div>
+          ))}
+        </div>
+      );
+    }
 
     case 'TOTAL':
       return (

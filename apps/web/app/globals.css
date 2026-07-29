@@ -92,7 +92,9 @@ body {
 
 .bill-card--minimalist .bill-merchant-info,
 .bill-card--minimalist .bill-items,
+.bill-card--minimalist .bill-items-table,
 .bill-card--minimalist .bill-payment-details,
+.bill-card--minimalist .bill-tax-summary,
 .bill-card--minimalist .bill-total,
 .bill-card--minimalist .bill-footer {
   margin-top: 12px;
@@ -120,6 +122,33 @@ body {
 .bill-card--minimalist .bill-items {
   display: flex;
   justify-content: space-between;
+}
+
+.bill-card--minimalist .bill-item-row,
+.bill-card--minimalist .bill-tax-summary-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+  padding: 4px 0;
+}
+
+.bill-card--minimalist .bill-item-row span,
+.bill-card--minimalist .bill-tax-summary-row span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bill-card--minimalist .bill-item-row--head,
+.bill-card--minimalist .bill-tax-summary-row--head {
+  color: var(--slate);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  border-bottom: 1px solid var(--hairline);
+  padding-bottom: 6px;
 }
 
 .bill-card--minimalist .bill-payment-details p {
@@ -192,7 +221,9 @@ body {
 
 .bill-card--thermal .bill-merchant-info,
 .bill-card--thermal .bill-items,
+.bill-card--thermal .bill-items-table,
 .bill-card--thermal .bill-payment-details,
+.bill-card--thermal .bill-tax-summary,
 .bill-card--thermal .bill-total,
 .bill-card--thermal .bill-footer {
   margin-top: 6px;
@@ -211,6 +242,31 @@ body {
 .bill-card--thermal .bill-items {
   display: flex;
   justify-content: space-between;
+}
+
+.bill-card--thermal .bill-item-row,
+.bill-card--thermal .bill-tax-summary-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 12px;
+  padding: 2px 0;
+}
+
+.bill-card--thermal .bill-item-row span,
+.bill-card--thermal .bill-tax-summary-row span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bill-card--thermal .bill-item-row--head,
+.bill-card--thermal .bill-tax-summary-row--head {
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--slate);
+  border-bottom: 1px dashed var(--hairline);
+  padding-bottom: 4px;
 }
 
 .bill-card--thermal .bill-payment-details p {

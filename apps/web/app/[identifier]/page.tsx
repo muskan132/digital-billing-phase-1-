@@ -6,11 +6,22 @@ import { ShareButton } from '../../src/render/ShareButton';
 
 const API_BASE_URL = process.env.API_BASE_URL ?? 'http://localhost:4000';
 
+// TEMPLATE_SYSTEM_v2 §7: the frozen render spec — the ONLY source of layout/skeleton
+// for rendering. Never read bill.template.layoutSchema via a live join here again;
+// that is the exact bug §7 exists to fix.
+interface BillLayoutSnapshot {
+  schemaVersion: number;
+  skeleton: string;
+  blocks: LayoutBlock[];
+  templateId: string;
+  templateVersion: number;
+}
+
 interface BillViewPayload {
   identifier: string;
   merchant: BillMerchant;
   bill: {
-    template: { layoutSchema: LayoutBlock[]; skeleton: string };
+    layoutSnapshot: BillLayoutSnapshot;
     snapshot: BillSnapshot;
   };
 }
@@ -26,8 +37,10 @@ function isBillViewPayload(value: unknown): value is BillViewPayload {
   if (typeof v.bill !== 'object' || v.bill === null) return false;
   const bill = v.bill as Record<string, unknown>;
   if (typeof bill.snapshot !== 'object' || bill.snapshot === null) return false;
-  if (typeof bill.template !== 'object' || bill.template === null) return false;
-  if (!Array.isArray((bill.template as Record<string, unknown>).layoutSchema)) return false;
+  if (typeof bill.layoutSnapshot !== 'object' || bill.layoutSnapshot === null) return false;
+  const layoutSnapshot = bill.layoutSnapshot as Record<string, unknown>;
+  if (typeof layoutSnapshot.skeleton !== 'string') return false;
+  if (!Array.isArray(layoutSnapshot.blocks)) return false;
   return true;
 }
 
@@ -75,7 +88,7 @@ export default async function BillPage({ params }: { params: Promise<{ identifie
 
   let blocks;
   try {
-    blocks = renderTemplate(payload.bill.template.layoutSchema, payload.bill.snapshot, payload.merchant);
+    blocks = renderTemplate(payload.bill.layoutSnapshot.blocks, payload.bill.snapshot, payload.merchant);
   } catch {
     // D-10: renderTemplate throws on an unknown block type — a template data bug,
     // not something to expose to a public unauthenticated page.
@@ -84,7 +97,7 @@ export default async function BillPage({ params }: { params: Promise<{ identifie
 
   return (
     <>
-      <BillBlocks blocks={blocks} skeleton={payload.bill.template.skeleton} />
+      <BillBlocks blocks={blocks} skeleton={payload.bill.layoutSnapshot.skeleton} />
       <DownloadButton />
       <ShareButton />
     </>

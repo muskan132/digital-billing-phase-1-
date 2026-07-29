@@ -127,6 +127,16 @@ export class CallbacksService {
               paymentInstId: callback.cardNetwork ? (callback.paymentInstId ?? null) : null,
               respDescription: callback.respDescription ?? null,
             },
+            // TEMPLATE_SYSTEM_v2 §7: freeze the resolved template's render spec onto
+            // the bill at creation. The renderer must read only this, never the live
+            // template — editing a template must never change how an issued bill renders.
+            layoutSnapshot: {
+              schemaVersion: 1,
+              skeleton: merchant.defaultTemplate.skeleton,
+              blocks: merchant.defaultTemplate.layoutSchema as Prisma.InputJsonValue,
+              templateId: merchant.defaultTemplate.id,
+              templateVersion: merchant.defaultTemplate.version,
+            },
           },
         },
         link: {

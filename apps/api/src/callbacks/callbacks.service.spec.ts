@@ -15,7 +15,13 @@ describe('CallbacksService.persist — Bill.snapshot whitelist', () => {
           id: 'merchant_1',
           name: 'Test Merchant',
           defaultChannel: 'EMAIL',
-          defaultTemplate: { id: 'template_1', billType: 'RECEIPT' },
+          defaultTemplate: {
+            id: 'template_1',
+            billType: 'RECEIPT',
+            skeleton: 'MINIMALIST',
+            layoutSchema: [{ type: 'HEADER', order: 1, props: {} }],
+            version: 1,
+          },
         }),
       },
       order: { upsert },
@@ -56,6 +62,55 @@ describe('CallbacksService.persist — Bill.snapshot whitelist', () => {
     );
   });
 
+  // TEMPLATE_SYSTEM_v2 §7: the resolved defaultTemplate's render spec must be frozen
+  // onto the bill at creation, independent of the live Template row afterward.
+  it('freezes the resolved defaultTemplate render spec into Bill.layoutSnapshot', async () => {
+    const upsert = jest.fn().mockResolvedValue(undefined);
+    const defaultTemplate = {
+      id: 'template_1',
+      billType: 'RECEIPT',
+      skeleton: 'MINIMALIST',
+      layoutSchema: [{ type: 'HEADER', order: 1, props: {} }],
+      version: 1,
+    };
+    const prisma = {
+      merchant: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'merchant_1',
+          name: 'Test Merchant',
+          defaultChannel: 'EMAIL',
+          defaultTemplate,
+        }),
+      },
+      order: { upsert },
+    } as unknown as PrismaService;
+
+    const service = new CallbacksService(prisma);
+
+    const callback: JioPayCallbackDto = {
+      txnID: 'txn_3',
+      merchantId: 'JP2000000007',
+      responseCode: '0000',
+      amount: '1.00',
+      merchantTxnNo: 'mtxn_3',
+      paymentID: 'pay_3',
+      paymentMode: 'UPI',
+      paymentDateTime: '20260717120000',
+      customerEmailID: 'customer@example.com',
+    };
+
+    await service.persist(callback, { raw: true });
+
+    const layoutSnapshot = upsert.mock.calls[0][0].create.bill.create.layoutSnapshot;
+    expect(layoutSnapshot).toEqual({
+      schemaVersion: 1,
+      skeleton: defaultTemplate.skeleton,
+      blocks: defaultTemplate.layoutSchema,
+      templateId: defaultTemplate.id,
+      templateVersion: defaultTemplate.version,
+    });
+  });
+
   // D-17: paymentInstId is only known-masked by JioPay for card transactions — for
   // other payment modes (e.g. UPI) it may carry a customer VPA, which is PII. It must
   // never be included unless cardNetwork confirms a card transaction.
@@ -67,7 +122,13 @@ describe('CallbacksService.persist — Bill.snapshot whitelist', () => {
           id: 'merchant_1',
           name: 'Test Merchant',
           defaultChannel: 'EMAIL',
-          defaultTemplate: { id: 'template_1', billType: 'RECEIPT' },
+          defaultTemplate: {
+            id: 'template_1',
+            billType: 'RECEIPT',
+            skeleton: 'MINIMALIST',
+            layoutSchema: [{ type: 'HEADER', order: 1, props: {} }],
+            version: 1,
+          },
         }),
       },
       order: { upsert },

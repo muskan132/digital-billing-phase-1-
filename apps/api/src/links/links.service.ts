@@ -48,12 +48,9 @@ export interface BillViewDto {
     placeOfSupply: string | null;
     merchantGstin: string | null;
     items: BillViewLineItem[];
-    template: {
-      name: string;
-      billType: string;
-      layoutSchema: unknown;
-      skeleton: string;
-    };
+    // TEMPLATE_SYSTEM_v2 §7: the frozen render spec — the renderer's ONLY source for
+    // layout/skeleton. Never re-derived from the live Template row at render time.
+    layoutSnapshot: unknown;
   };
 }
 
@@ -116,14 +113,11 @@ export class LinksService {
                 igstPaise: true,
                 placeOfSupply: true,
                 merchantGstin: true,
-                template: {
-                  select: {
-                    name: true,
-                    billType: true,
-                    layoutSchema: true,
-                    skeleton: true, // layout enum only, not data — safe to whitelist
-                  },
-                },
+                // TEMPLATE_SYSTEM_v2 §7: layout comes from the frozen snapshot only.
+                // The `template` relation must NEVER be selected here for layout
+                // purposes — that live join is exactly the bug §7 fixes. Do not add
+                // it back.
+                layoutSnapshot: true,
               },
             },
             // v2 (L-3, D-28): line items, whitelisted to exactly the D-28 items[]
@@ -202,7 +196,7 @@ export class LinksService {
           sgstPaise: item.sgstPaise.toString(),
           igstPaise: item.igstPaise.toString(),
         })),
-        template: bill.template,
+        layoutSnapshot: bill.layoutSnapshot,
       },
     };
   }
