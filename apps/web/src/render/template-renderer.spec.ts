@@ -1,4 +1,4 @@
-import { renderTemplate, LayoutBlock, BillSnapshot, BillSnapshotLineItem, BillMerchant } from './template-renderer';
+import { renderTemplate, LayoutBlock, BillSnapshot, BillSnapshotLineItem, BillMerchant, ColumnConfig } from './template-renderer';
 
 // Mirrors apps/api/prisma/seed.ts's RECEIPT_LAYOUT_SCHEMA (shared by both skeletons).
 const SEEDED_LAYOUT_SCHEMA: LayoutBlock[] = [
@@ -20,6 +20,33 @@ const SEEDED_TAX_COMPLIANT_LAYOUT_SCHEMA: LayoutBlock[] = [
   { type: 'TAX_SUMMARY', order: 4, props: {} },
   { type: 'TOTAL', order: 5, props: {} },
   { type: 'FOOTER', order: 6, props: {} },
+];
+
+// Mirrors apps/api/prisma/seed.ts's retailTemplateData.layoutSchema exactly (kept in
+// sync by hand, same known gap as SEEDED_TAX_COMPLIANT_LAYOUT_SCHEMA above).
+const RETAIL_ITEMS_COLUMNS: ColumnConfig[] = [
+  { field: 'name', label: 'ITEM', visible: true, align: 'left' },
+  { field: 'quantity', label: 'QTY', visible: true, align: 'left' },
+  { field: 'unitPricePaise', label: 'RATE', visible: false, align: 'right' },
+  { field: 'amountPaise', label: 'AMOUNT', visible: true, align: 'right' },
+];
+
+const SEEDED_RETAIL_LAYOUT_SCHEMA: LayoutBlock[] = [
+  { type: 'HEADER', order: 1, props: {} },
+  { type: 'MERCHANT_INFO', order: 2, props: {} },
+  { type: 'ITEMS', order: 3, props: { columns: RETAIL_ITEMS_COLUMNS, secondaryFields: ['hsn'] } },
+  { type: 'TOTAL', order: 4, props: { basis: 'pre_tax' } },
+  { type: 'SAVINGS', order: 5, props: {} },
+  { type: 'TAX_SUMMARY', order: 6, props: { mode: 'auto' } },
+  { type: 'AMOUNT_PAYABLE', order: 7, props: {} },
+  { type: 'LOYALTY', order: 8, props: {} },
+  {
+    type: 'COUPON',
+    order: 9,
+    props: { headline: 'Get 10% off your next visit', code: 'RETAIL10', validity: 'Valid for 30 days', ctaLabel: 'Show this code at checkout' },
+  },
+  { type: 'SURVEY', order: 10, props: { prompt: 'How was your shopping experience today?', type: 'rating', url: 'https://example.test/survey' } },
+  { type: 'FOOTER', order: 11, props: {} },
 ];
 
 // Mirrors the snapshot shape apps/api/src/callbacks/callbacks.service.ts (P-1) writes.
@@ -136,7 +163,7 @@ describe('renderTemplate', () => {
         gstin: '27ABCDE1234F1Z5',
       },
       { type: 'ITEMS', kind: 'single', totalPaise: '100', currency: 'INR' },
-      { type: 'TOTAL', totalPaise: '100', currency: 'INR' },
+      { type: 'TOTAL', kind: 'simple', totalPaise: '100', currency: 'INR' },
       {
         type: 'PAYMENT_DETAILS',
         paymentMode: 'Card',
@@ -187,7 +214,7 @@ describe('renderTemplate', () => {
 
     expect(result).toEqual([
       { type: 'ITEMS', kind: 'single', totalPaise: 'Amount unavailable', currency: 'Amount unavailable' },
-      { type: 'TOTAL', totalPaise: 'Amount unavailable', currency: 'Amount unavailable' },
+      { type: 'TOTAL', kind: 'simple', totalPaise: 'Amount unavailable', currency: 'Amount unavailable' },
     ]);
   });
 
@@ -211,7 +238,7 @@ describe('renderTemplate', () => {
   it('renders TAX_SUMMARY with no rows when the snapshot has no items (e.g. a RECEIPT snapshot), without throwing', () => {
     const result = renderTemplate([{ type: 'TAX_SUMMARY', order: 1, props: {} }], SAMPLE_SNAPSHOT, SAMPLE_MERCHANT);
 
-    expect(result).toEqual([{ type: 'TAX_SUMMARY', isIntraState: true, rows: [], currency: 'INR' }]);
+    expect(result).toEqual([{ type: 'TAX_SUMMARY', kind: 'legacy_matrix', isIntraState: true, rows: [], currency: 'INR' }]);
   });
 
   it('renders the seeded TAX_COMPLIANT layoutSchema (T-2) end-to-end without throwing', () => {
@@ -291,6 +318,7 @@ describe('renderTemplate', () => {
     expect(result).toEqual([
       {
         type: 'TAX_SUMMARY',
+        kind: 'legacy_matrix',
         isIntraState: true,
         currency: 'INR',
         rows: [
@@ -311,6 +339,7 @@ describe('renderTemplate', () => {
     expect(result).toEqual([
       {
         type: 'TAX_SUMMARY',
+        kind: 'legacy_matrix',
         isIntraState: false,
         currency: 'INR',
         rows: [
@@ -335,6 +364,7 @@ describe('renderTemplate', () => {
     expect(result).toEqual([
       {
         type: 'TAX_SUMMARY',
+        kind: 'legacy_matrix',
         isIntraState: true,
         currency: 'INR',
         rows: [{ taxRateBp: 500, taxableValuePaise: '30000', cgstPaise: '750', sgstPaise: '750', igstPaise: '0' }],
@@ -378,5 +408,268 @@ describe('renderTemplate', () => {
         items: [expect.objectContaining({ name: maliciousName })],
       }),
     ]);
+  });
+
+  // ==================== RETAIL template ====================
+
+  it('RETAIL: renders the full seeded layoutSchema end-to-end without throwing, in order', () => {
+    const result = renderTemplate(SEEDED_RETAIL_LAYOUT_SCHEMA, TAX_INVOICE_SNAPSHOT, SAMPLE_MERCHANT);
+
+    expect(result.map((block) => block.type)).toEqual([
+      'HEADER',
+      'MERCHANT_INFO',
+      'ITEMS',
+      'TOTAL',
+      'SAVINGS',
+      'TAX_SUMMARY',
+      'AMOUNT_PAYABLE',
+      'LOYALTY',
+      'COUPON',
+      'SURVEY',
+      'FOOTER',
+    ]);
+  });
+
+  it('RETAIL: columns-driven ITEMS reads field/label/visible/align from props.columns, computing amountPaise = taxable+tax', () => {
+    const block: LayoutBlock = { type: 'ITEMS', order: 1, props: { columns: RETAIL_ITEMS_COLUMNS, secondaryFields: ['hsn'] } };
+    const result = renderTemplate([block], TAX_INVOICE_SNAPSHOT, SAMPLE_MERCHANT);
+
+    expect(result).toEqual([
+      {
+        type: 'ITEMS',
+        kind: 'columns',
+        columns: RETAIL_ITEMS_COLUMNS,
+        secondaryFields: ['hsn'],
+        currency: 'INR',
+        rows: [
+          {
+            lineNo: 1,
+            fields: {
+              name: 'Wireless Mouse',
+              hsn: '8471',
+              uom: 'NOS',
+              quantity: 2,
+              unitPricePaise: '10000',
+              discountPaise: '0',
+              taxRateBp: 500,
+              taxableValuePaise: '20000',
+              taxPaise: '1000',
+              amountPaise: '21000', // 20000 + 1000
+            },
+          },
+          {
+            lineNo: 2,
+            fields: {
+              name: 'USB-C Cable',
+              hsn: '8544',
+              uom: 'NOS',
+              quantity: 1,
+              unitPricePaise: '5000',
+              discountPaise: '0',
+              taxRateBp: 1800,
+              taxableValuePaise: '5000',
+              taxPaise: '900',
+              amountPaise: '5900', // 5000 + 900
+            },
+          },
+        ],
+      },
+    ]);
+  });
+
+  it('RETAIL: falls back to the "columns" kind only when props.columns is present — plain ITEMS blocks are unaffected', () => {
+    const result = renderTemplate([{ type: 'ITEMS', order: 1, props: {} }], TAX_INVOICE_SNAPSHOT, SAMPLE_MERCHANT);
+
+    const block = result[0];
+    expect(block.type).toBe('ITEMS');
+    if (block.type === 'ITEMS') expect(block.kind).toBe('itemized'); // TAX_COMPLIANT's existing path, untouched
+  });
+
+  it('RETAIL: TOTAL with props.basis "pre_tax" shows subtotal - discount, not the grand total', () => {
+    const result = renderTemplate([{ type: 'TOTAL', order: 1, props: { basis: 'pre_tax' } }], TAX_INVOICE_SNAPSHOT, SAMPLE_MERCHANT);
+
+    expect(result).toEqual([{ type: 'TOTAL', kind: 'pre_tax', totalPaise: '25000', currency: 'INR' }]); // 25000 - 0
+  });
+
+  it('RETAIL: TOTAL without props.basis keeps the existing grand-total behavior (other skeletons unaffected)', () => {
+    const result = renderTemplate([{ type: 'TOTAL', order: 1, props: {} }], TAX_INVOICE_SNAPSHOT, SAMPLE_MERCHANT);
+
+    expect(result).toEqual([{ type: 'TOTAL', kind: 'simple', totalPaise: 'Amount unavailable', currency: 'INR' }]);
+  });
+
+  it('RETAIL: AMOUNT_PAYABLE shows the grand total (distinct from pre-tax TOTAL)', () => {
+    const snapshot: BillSnapshot = { ...TAX_INVOICE_SNAPSHOT, amountPaise: '26900' };
+    const result = renderTemplate([{ type: 'AMOUNT_PAYABLE', order: 1, props: {} }], snapshot, SAMPLE_MERCHANT);
+
+    expect(result).toEqual([{ type: 'AMOUNT_PAYABLE', totalPaise: '26900', currency: 'INR' }]);
+  });
+
+  // ---- RETAIL: TAX_SUMMARY aggregate shape (§5, final spec) ----
+  // ONE structure always: Taxable Amount, one CGST row, one SGST row (or one IGST row
+  // inter-state), Total Tax — summed across ALL tax rates, no per-rate breakdown, no
+  // rate percentages, regardless of how many distinct rates are on the bill. This
+  // replaces the earlier 'component_rows' simple/detailed pair entirely.
+
+  it('RETAIL: TAX_SUMMARY aggregates a single tax slab, intra-state — one CGST row, one SGST row, no rate shown', () => {
+    const snapshot: BillSnapshot = {
+      ...TAX_INVOICE_SNAPSHOT,
+      cgstPaise: '500',
+      sgstPaise: '500',
+      igstPaise: '0',
+      items: [TAX_INVOICE_ITEMS[0]], // single 500bp slab only
+    };
+
+    const result = renderTemplate([{ type: 'TAX_SUMMARY', order: 1, props: { mode: 'auto' } }], snapshot, SAMPLE_MERCHANT);
+
+    expect(result).toEqual([
+      {
+        type: 'TAX_SUMMARY',
+        kind: 'aggregate',
+        isIntraState: true,
+        taxableValuePaise: '20000',
+        cgstPaise: '500',
+        sgstPaise: '500',
+        igstPaise: '0',
+        totalTaxPaise: '1000',
+        currency: 'INR',
+      },
+    ]);
+  });
+
+  it('RETAIL: TAX_SUMMARY aggregates a single tax slab, inter-state — one IGST row, no CGST/SGST', () => {
+    const singleSlabItem: BillSnapshotLineItem = { ...TAX_INVOICE_ITEMS[0], cgstPaise: '0', sgstPaise: '0', igstPaise: '1000' };
+    const snapshot: BillSnapshot = {
+      ...TAX_INVOICE_SNAPSHOT,
+      cgstPaise: '0',
+      sgstPaise: '0',
+      igstPaise: '1000',
+      items: [singleSlabItem],
+    };
+
+    const result = renderTemplate([{ type: 'TAX_SUMMARY', order: 1, props: { mode: 'auto' } }], snapshot, SAMPLE_MERCHANT);
+
+    expect(result).toEqual([
+      {
+        type: 'TAX_SUMMARY',
+        kind: 'aggregate',
+        isIntraState: false,
+        taxableValuePaise: '20000',
+        cgstPaise: '0',
+        sgstPaise: '0',
+        igstPaise: '1000',
+        totalTaxPaise: '1000',
+        currency: 'INR',
+      },
+    ]);
+  });
+
+  it('RETAIL: TAX_SUMMARY with MULTIPLE tax slabs still produces exactly ONE CGST value and ONE SGST value, summed across all rates — no per-rate breakdown', () => {
+    // TAX_INVOICE_SNAPSHOT has two distinct rates (500bp, 1800bp) — this is exactly the
+    // case that used to trigger 'detailed' mode's 4-row table. It must not anymore.
+    const result = renderTemplate([{ type: 'TAX_SUMMARY', order: 1, props: { mode: 'auto' } }], TAX_INVOICE_SNAPSHOT, SAMPLE_MERCHANT);
+
+    expect(result).toEqual([
+      {
+        type: 'TAX_SUMMARY',
+        kind: 'aggregate',
+        isIntraState: true,
+        taxableValuePaise: '25000', // 20000 + 5000, summed across both slabs
+        cgstPaise: '950', // 500 + 450, summed across both slabs — NOT two separate rows
+        sgstPaise: '950', // 500 + 450
+        igstPaise: '0',
+        totalTaxPaise: '1900', // 950 + 950
+        currency: 'INR',
+      },
+    ]);
+  });
+
+  it('RETAIL: TAX_SUMMARY with multiple tax slabs, inter-state, produces exactly ONE IGST value summed across all rates', () => {
+    const result = renderTemplate(
+      [{ type: 'TAX_SUMMARY', order: 1, props: { mode: 'auto' } }],
+      INTER_STATE_TAX_INVOICE_SNAPSHOT,
+      SAMPLE_MERCHANT,
+    );
+
+    expect(result).toEqual([
+      {
+        type: 'TAX_SUMMARY',
+        kind: 'aggregate',
+        isIntraState: false,
+        taxableValuePaise: '25000',
+        cgstPaise: '0',
+        sgstPaise: '0',
+        igstPaise: '1900', // 1000 + 900, summed across both slabs
+        totalTaxPaise: '1900',
+        currency: 'INR',
+      },
+    ]);
+  });
+
+  it('RETAIL: TAX_SUMMARY Total Tax is computed as cgstPaise + sgstPaise (BigInt), never independently re-derived', () => {
+    const result = renderTemplate([{ type: 'TAX_SUMMARY', order: 1, props: { mode: 'auto' } }], TAX_INVOICE_SNAPSHOT, SAMPLE_MERCHANT);
+
+    const block = result[0];
+    if (block.type !== 'TAX_SUMMARY' || block.kind !== 'aggregate') throw new Error('expected aggregate TAX_SUMMARY');
+
+    expect(block.totalTaxPaise).toBe((BigInt(block.cgstPaise) + BigInt(block.sgstPaise)).toString());
+  });
+
+  it('RETAIL: TAX_SUMMARY without an explicit props.mode keeps the existing legacy_matrix behavior (TAX_COMPLIANT unaffected)', () => {
+    const result = renderTemplate([{ type: 'TAX_SUMMARY', order: 1, props: {} }], TAX_INVOICE_SNAPSHOT, SAMPLE_MERCHANT);
+
+    const block = result[0];
+    expect(block.type).toBe('TAX_SUMMARY');
+    if (block.type === 'TAX_SUMMARY') expect(block.kind).toBe('legacy_matrix');
+  });
+
+  // ---- RETAIL: SAVINGS/LOYALTY — no data source yet, never fabricated ----
+
+  it('RETAIL: SAVINGS has no data source yet — savingsPaise is always undefined', () => {
+    const result = renderTemplate([{ type: 'SAVINGS', order: 1, props: {} }], TAX_INVOICE_SNAPSHOT, SAMPLE_MERCHANT);
+
+    expect(result).toEqual([{ type: 'SAVINGS', savingsPaise: undefined, currency: 'INR' }]);
+  });
+
+  it('RETAIL: LOYALTY has no data source yet — pointsEarned/balance are always undefined', () => {
+    const result = renderTemplate([{ type: 'LOYALTY', order: 1, props: {} }], TAX_INVOICE_SNAPSHOT, SAMPLE_MERCHANT);
+
+    expect(result).toEqual([{ type: 'LOYALTY', pointsEarned: undefined, balance: undefined }]);
+  });
+
+  // ---- RETAIL: COUPON/SURVEY — template-authored static copy, CAN render real
+  // content today (unlike SAVINGS/LOYALTY, which need bill-computed data). ----
+
+  it('RETAIL: COUPON renders real template-authored props, no bill-data dependency', () => {
+    const block: LayoutBlock = {
+      type: 'COUPON',
+      order: 1,
+      props: { headline: '10% off your next visit', code: 'RETAIL10', validity: 'Valid till 31 Aug', ctaLabel: 'Redeem' },
+    };
+    const result = renderTemplate([block], TAX_INVOICE_SNAPSHOT, SAMPLE_MERCHANT);
+
+    expect(result).toEqual([
+      { type: 'COUPON', headline: '10% off your next visit', code: 'RETAIL10', validity: 'Valid till 31 Aug', ctaLabel: 'Redeem' },
+    ]);
+  });
+
+  it('RETAIL: SURVEY renders real template-authored props', () => {
+    const block: LayoutBlock = { type: 'SURVEY', order: 1, props: { prompt: 'How was your visit?', type: 'rating', url: 'https://example.test/survey' } };
+    const result = renderTemplate([block], TAX_INVOICE_SNAPSHOT, SAMPLE_MERCHANT);
+
+    expect(result).toEqual([{ type: 'SURVEY', prompt: 'How was your visit?', surveyType: 'rating', url: 'https://example.test/survey' }]);
+  });
+
+  // ---- RETAIL: item name safety in the columns-driven path ----
+
+  it('RETAIL: a <script> in an item name passes through the columns-driven ITEMS unmodified as plain data', () => {
+    const maliciousName = '<script>alert(1)</script>';
+    const snapshot: BillSnapshot = { ...TAX_INVOICE_SNAPSHOT, items: [{ ...TAX_INVOICE_ITEMS[0], name: maliciousName }] };
+    const block: LayoutBlock = { type: 'ITEMS', order: 1, props: { columns: RETAIL_ITEMS_COLUMNS, secondaryFields: ['hsn'] } };
+
+    const result = renderTemplate([block], snapshot, SAMPLE_MERCHANT);
+
+    const itemsBlock = result[0];
+    if (itemsBlock.type !== 'ITEMS' || itemsBlock.kind !== 'columns') throw new Error('expected columns ITEMS');
+    expect(itemsBlock.rows[0].fields.name).toBe(maliciousName);
   });
 });

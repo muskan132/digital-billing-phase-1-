@@ -295,6 +295,247 @@ body {
   right: 16px;
 }
 
+/* ==================== RETAIL skin ====================
+   docs/TEMPLATE_SYSTEM_v2.md §4.2 — mobile-first stacked bill, not a table. Phone-card
+   width like MINIMALIST, not document width (that's TAX_COMPLIANT/B2B's job). */
+.bill-card--retail {
+  max-width: 400px;
+  padding: 24px;
+  border-radius: 12px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+.bill-card--retail .bill-header {
+  margin-bottom: 16px;
+}
+
+.bill-card--retail .bill-merchant-name {
+  font-size: 26px;
+  font-weight: 600;
+  margin: 0 0 4px;
+}
+
+.bill-card--retail .bill-receipt-label {
+  margin: 0;
+  color: var(--slate);
+}
+
+.bill-card--retail .bill-receipt-number,
+.bill-card--retail .bill-header-date {
+  color: var(--slate);
+  font-size: 14px;
+  margin: 4px 0 0;
+}
+
+.bill-card--retail .bill-paid-badge {
+  position: absolute;
+  top: 24px;
+  right: 24px;
+}
+
+.bill-card--retail .bill-merchant-info,
+.bill-card--retail .bill-items-stack,
+.bill-card--retail .bill-total,
+.bill-card--retail .bill-savings,
+.bill-card--retail .bill-tax-summary,
+.bill-card--retail .bill-loyalty,
+.bill-card--retail .bill-coupon,
+.bill-card--retail .bill-survey,
+.bill-card--retail .bill-footer--retail {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--hairline);
+}
+
+.bill-card--retail .bill-merchant-info {
+  color: var(--slate);
+}
+
+.bill-card--retail .bill-merchant-info p {
+  margin: 0 0 2px;
+}
+
+.bill-card--retail .bill-gstin {
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
+}
+
+/* ---- ITEMS: stacked rows, name x qty inline, amount right-aligned, HSN muted
+   beneath (goal #1) — driven by the columns-driven 'columns' ITEMS kind. ---- */
+.bill-item-stack-row {
+  padding: 8px 0;
+}
+
+.bill-item-stack-row + .bill-item-stack-row {
+  border-top: 1px solid var(--hairline);
+}
+
+.bill-item-stack-main {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.bill-item-name {
+  flex: 1;
+}
+
+.bill-item-qty {
+  color: var(--slate);
+}
+
+.bill-item-amount {
+  white-space: nowrap;
+}
+
+.bill-item-stack-extra {
+  display: flex;
+  flex-direction: column;
+  color: var(--slate);
+  font-size: 13px;
+  margin-top: 2px;
+}
+
+.bill-item-stack-secondary {
+  color: var(--slate);
+  font-size: 12px;
+  margin-top: 2px;
+}
+
+.bill-card--retail .bill-total {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.bill-card--retail .bill-total-label {
+  color: var(--slate);
+}
+
+.bill-card--retail .bill-amount {
+  font-size: 22px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- SAVINGS (§3 #10) ---- */
+.bill-savings {
+  color: var(--semantic-success);
+  font-weight: 600;
+}
+
+/* ---- TAX_SUMMARY aggregate shape (§5, final spec) — Taxable Amount, one CGST row,
+   one SGST row (or one IGST row inter-state), Total Tax. No per-rate rows. ---- */
+.bill-tax-summary-ladder-row {
+  display: flex;
+  justify-content: space-between;
+  font-variant-numeric: tabular-nums;
+  padding: 3px 0;
+}
+
+.bill-tax-summary-ladder-row--total {
+  font-weight: 600;
+  border-top: 1px solid var(--hairline);
+  margin-top: 4px;
+  padding-top: 6px;
+}
+
+/* ---- GRAND TOTAL (§3 #8, AMOUNT_PAYABLE block restyled per the confirmed mockup) —
+   a separate visual section closing the document: own top border + background,
+   not the plain hairline separator the other blocks share. ---- */
+.bill-grand-total {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  margin: 16px -24px -24px;
+  padding: 16px 24px;
+  border-top: 1px solid var(--hairline);
+  /* --canvas, not --surface — the card's own background is --surface, so this must be
+     a different token to read as a distinct section rather than blend into the card. */
+  background: var(--canvas);
+  border-radius: 0 0 12px 12px;
+  text-align: center;
+}
+
+.bill-grand-total-label {
+  color: var(--slate);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.bill-grand-total-value {
+  font-size: 30px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- LOYALTY (§3 #11) ---- */
+.bill-loyalty {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.bill-loyalty-balance {
+  color: var(--slate);
+  font-size: 13px;
+}
+
+/* ---- COUPON (§3 #19) ---- */
+.bill-coupon {
+  background: var(--surface);
+  border: 1px dashed var(--primary);
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.bill-coupon-headline {
+  font-weight: 600;
+  margin: 0 0 4px;
+}
+
+.bill-coupon-code {
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
+  letter-spacing: 1px;
+  margin: 0 0 4px;
+}
+
+.bill-coupon-validity {
+  color: var(--slate);
+  font-size: 13px;
+  margin: 0;
+}
+
+.bill-coupon-cta {
+  display: inline-block;
+  margin-top: 8px;
+  color: var(--primary);
+  font-weight: 600;
+}
+
+/* ---- SURVEY (§3 #20) ---- */
+.bill-survey-prompt {
+  color: var(--slate);
+  margin: 0;
+}
+
+/* ---- FOOTER (goal #8): support contact left, "Powered by JioPay" right,
+   "Questions?" not "Questions about this receipt?" ---- */
+.bill-footer--retail {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  color: var(--slate);
+  font-size: 13px;
+}
+
+.bill-powered-by {
+  font-weight: 600;
+}
+
 .btn-download,
 .btn-share {
   display: flex;

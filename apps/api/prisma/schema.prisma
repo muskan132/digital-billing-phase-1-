@@ -28,6 +28,7 @@ enum TemplateSkeleton {
   MINIMALIST
   COMPACT_THERMAL
   TAX_COMPLIANT
+  RETAIL
 }
 
 enum OrderStatus {
