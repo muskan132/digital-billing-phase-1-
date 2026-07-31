@@ -63,6 +63,43 @@ describe('BroadcastDrainerService', () => {
     });
   });
 
+  // B-3: this is the structural half of the source-agnosticism proof. The drainer's
+  // query above never selects/joins Order.source or Bill.billType — it filters purely
+  // on Broadcast's own status/attempts. A PG_CALLBACK-sourced and a DIRECT_API-sourced
+  // row are therefore indistinguishable to this query by construction, not by
+  // coincidence: there is no field here a future change could accidentally branch on
+  // without first adding a join that doesn't exist today.
+  it('B-3: the drain query has no Order/Bill relation and no source/billType field, for any row', async () => {
+    findMany.mockResolvedValue([]);
+    await service.drain();
+
+    const [args] = findMany.mock.calls[0] as [Record<string, unknown>];
+    expect(args).not.toHaveProperty('include');
+    expect(args).not.toHaveProperty('select');
+    const serializedWhere = JSON.stringify(args.where);
+    expect(serializedWhere).not.toContain('source');
+    expect(serializedWhere).not.toContain('billType');
+  });
+
+  // B-3: behavioral half — a Broadcast row from a DIRECT_API/TAX_INVOICE order (P-2's
+  // nested-write path, bills.service.ts) drains identically to the PG_CALLBACK-sourced
+  // rows every other test in this file already covers. orderId is flavored only in the
+  // comment/value below since the row shape itself carries no source field — see the
+  // structural test above for why that's the point, not a gap.
+  it('B-3: a DIRECT_API/TAX_INVOICE-sourced row (invoice path) drains to SENT identically to a PG_CALLBACK-sourced one', async () => {
+    const row = makeRow({ id: 'invoice-b1', orderId: 'direct-api-order-1', recipient: 'diner@example.com' });
+    findMany.mockResolvedValue([row]);
+    sendBroadcast.mockResolvedValue({ sent: true });
+
+    await service.drain();
+
+    expect(sendBroadcast).toHaveBeenCalledWith({ channel: Channel.EMAIL, recipient: 'diner@example.com' });
+    expect(update).toHaveBeenCalledWith({
+      where: { id: 'invoice-b1' },
+      data: { status: BroadcastStatus.SENT, sentAt: expect.any(Date) },
+    });
+  });
+
   it('a failing row does not stop later rows in the same batch from sending', async () => {
     const rowA = makeRow({ id: 'a', createdAt: new Date('2026-01-01T00:00:00Z') });
     const rowB = makeRow({ id: 'b', createdAt: new Date('2026-01-01T00:00:01Z') });
