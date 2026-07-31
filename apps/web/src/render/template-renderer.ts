@@ -7,9 +7,13 @@ import { formatCallbackDateTime } from './date-format';
 // distinct from TOTAL: §3 documents TOTAL as the pre-tax total and AMOUNT_PAYABLE as
 // the post-tax hero total — §5's fixed document order (Items -> TOTAL -> tax ladder ->
 // AMOUNT_PAYABLE) only makes sense if they're different figures.
+// BILL_META added for RESTAURANT/QSR (§3 catalogue #3, §4.1) — bill no. + date only,
+// no table number/server name (staff-internal, not customer-useful per explicit
+// feedback).
 const KNOWN_BLOCK_TYPES = [
   'HEADER',
   'MERCHANT_INFO',
+  'BILL_META',
   'ITEMS',
   'PAYMENT_DETAILS',
   'TAX_SUMMARY',
@@ -155,6 +159,7 @@ export type RenderedBlock =
     }
   | {
       type: 'MERCHANT_INFO';
+      kind: 'receipt';
       addressLine1: string | null | undefined;
       addressLine2: string | null | undefined;
       city: string | null | undefined;
@@ -162,12 +167,36 @@ export type RenderedBlock =
       pincode: string | null | undefined;
       gstin: string | null | undefined;
     }
+  // 'tax_invoice' (TAX_COMPLIANT, BUG 1 fix): the two-column seller/invoice-meta block.
+  // Sourced entirely from the FROZEN snapshot (merchantName/merchantAddress/
+  // merchantGstin/invoiceNumber/placeOfSupply), never the live `merchant` param — BR-2
+  // immutability: a tax invoice's printed seller details must reflect what was true at
+  // issue time, not the merchant's current profile. No invoice date: Bill.snapshot
+  // carries no date field for TAX_INVOICE bills (tracked separately in memory —
+  // project_tax_compliant_known_bugs.md §3 — not fabricated here).
+  | {
+      type: 'MERCHANT_INFO';
+      kind: 'tax_invoice';
+      merchantName: string | undefined;
+      address: string | null | undefined;
+      gstin: string | null | undefined;
+      invoiceNumber: string | undefined;
+      placeOfSupply: string | undefined;
+    }
+  // §3 catalogue #3 — bill no. only, in practice. `date` carries the same field shape
+  // as SAVINGS/LOYALTY: built to spec, never fabricated. No date field exists anywhere
+  // in Bill.snapshot (tracked in memory: project_tax_compliant_known_bugs.md §3) — so
+  // `date` is always undefined until that persistence gap gets its own follow-up task.
+  | { type: 'BILL_META'; billNumber: string | undefined; date: string | undefined }
   // 'single': no line items on the snapshot (RECEIPT bills — FSD BR-23 confirms a
   // Payment Receipt has no line-item section) — the original one-row summary.
-  // 'itemized' (V-5): real per-line rows for TAX_COMPLIANT, hardcoded fields — left
-  // untouched (see TaxSummaryRow's comment re: not disturbing shipped rendering).
-  // 'columns' (RETAIL): field/label/visible/align-driven, per §2/§9's builder contract
-  // — used whenever the template's ITEMS block declares props.columns.
+  // 'itemized' (V-5): real per-line rows, hardcoded fields. No longer used by any
+  // seeded template after BUG 1 (TAX_COMPLIANT moved to 'columns' below) — kept in
+  // place as a valid variant, not deleted, since nothing asked for its removal.
+  // 'columns' (RETAIL, and now TAX_COMPLIANT): field/label/visible/align-driven, per
+  // §2/§9's builder contract — used whenever the template's ITEMS block declares
+  // props.columns. The same data model drives both a stacked mobile layout (RETAIL)
+  // and a real <table> (TAX_COMPLIANT) — only the JSX differs, not this shape.
   | { type: 'ITEMS'; kind: 'single'; totalPaise: string; currency: string }
   | { type: 'ITEMS'; kind: 'itemized'; items: RenderedLineItem[]; currency: string }
   | {
@@ -282,9 +311,24 @@ function renderBlock(block: LayoutBlock, snapshot: BillSnapshot, merchant: BillM
         receiptNumber: snapshot.receiptNumber,
         formattedDateTime: formatCallbackDateTime(snapshot.paymentDateTime),
       };
-    case 'MERCHANT_INFO':
+    case 'MERCHANT_INFO': {
+      // TAX_COMPLIANT (BUG 1): opted into via an explicit props.variant, same pattern
+      // as TOTAL's props.basis / TAX_SUMMARY's props.mode — sourced from the frozen
+      // snapshot, never the live `merchant` param (see the RenderedBlock comment above).
+      if (block.props.variant === 'tax_invoice') {
+        return {
+          type: 'MERCHANT_INFO',
+          kind: 'tax_invoice',
+          merchantName: snapshot.merchantName,
+          address: snapshot.merchantAddress,
+          gstin: snapshot.merchantGstin,
+          invoiceNumber: snapshot.invoiceNumber,
+          placeOfSupply: snapshot.placeOfSupply,
+        };
+      }
       return {
         type: 'MERCHANT_INFO',
+        kind: 'receipt',
         addressLine1: merchant.addressLine1,
         addressLine2: merchant.addressLine2,
         city: merchant.city,
@@ -292,6 +336,10 @@ function renderBlock(block: LayoutBlock, snapshot: BillSnapshot, merchant: BillM
         pincode: merchant.pincode,
         gstin: merchant.gstin,
       };
+    }
+    case 'BILL_META':
+      // date always undefined — see the RenderedBlock comment above.
+      return { type: 'BILL_META', billNumber: snapshot.invoiceNumber, date: undefined };
     case 'ITEMS': {
       const hasItems = snapshot.items && snapshot.items.length > 0;
 

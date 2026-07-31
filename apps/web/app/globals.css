@@ -442,20 +442,29 @@ body {
 }
 
 /* ---- GRAND TOTAL (§3 #8, AMOUNT_PAYABLE block restyled per the confirmed mockup) —
-   a separate visual section closing the document: own top border + background,
-   not the plain hairline separator the other blocks share. ---- */
+   a distinct visual section: own top border + background, not the plain hairline
+   separator the other blocks share.
+   FIXED (found while tracing RESTAURANT's full block sequence): this used to bleed to
+   the card's edges with bottom-corner radius via negative margins, which only looks
+   right if it's the LAST block in the card. It isn't, in either RETAIL's or
+   RESTAURANT's actual seeded order (LOYALTY/COUPON/SURVEY/FOOTER, or FOOTER/COUPON/
+   SURVEY, follow it) — so it used to render as a rounded band bleeding sideways in the
+   MIDDLE of the card, with more square-edged content continuing below it. No longer
+   assumes position in the stack — renders as a normal full-width bordered section
+   wherever it sits. Applies to both RETAIL and RESTAURANT, which share this class. ---- */
 .bill-grand-total {
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 4px;
-  margin: 16px -24px -24px;
-  padding: 16px 24px;
+  margin-top: 16px;
+  /* Vertical only — no horizontal padding: this no longer bleeds past the card's own
+     padding, so adding more here would just indent it further than every other block. */
+  padding: 16px 0;
   border-top: 1px solid var(--hairline);
   /* --canvas, not --surface — the card's own background is --surface, so this must be
      a different token to read as a distinct section rather than blend into the card. */
   background: var(--canvas);
-  border-radius: 0 0 12px 12px;
   text-align: center;
 }
 
@@ -534,6 +543,346 @@ body {
 
 .bill-powered-by {
   font-weight: 600;
+}
+
+/* ==================== TAX_COMPLIANT skin (BUG 1) ====================
+   docs/TEMPLATE_SYSTEM_v2.md §4.4, minus BILL_TO (public unauthenticated page — buyer
+   identity must never render here) and PAYMENT_DETAILS (B2B bank/A/C/IFSC terms, not
+   applicable to the direct-API path). Document proportions, not phone-card width —
+   rendered by TaxInvoiceCard.tsx, not the generic per-block stacker.
+   Padding/radius intentionally match .bill-card--retail exactly (24px / 12px) so the
+   shared .bill-grand-total rule's bleed-to-edge math works unmodified for both skins. */
+.tax-invoice-scroll-wrapper {
+  overflow-x: auto;
+}
+
+.bill-card--tax-invoice {
+  max-width: 720px;
+  padding: 24px;
+  border-radius: 12px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+.tax-invoice-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 20px;
+}
+
+.tax-invoice-title {
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  margin: 0;
+}
+
+.tax-invoice-subtitle {
+  color: var(--slate);
+  font-size: 14px;
+  margin: 4px 0 0;
+}
+
+.tax-invoice-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 32px;
+  padding-bottom: 16px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.tax-invoice-meta-seller,
+.tax-invoice-meta-details {
+  flex: 1;
+}
+
+.tax-invoice-meta-seller p {
+  margin: 0 0 2px;
+  color: var(--slate);
+}
+
+.tax-invoice-meta-seller p.tax-invoice-seller-name {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.bill-card--tax-invoice .bill-gstin {
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
+}
+
+.tax-invoice-meta-label {
+  text-transform: uppercase;
+  font-size: 11px;
+  letter-spacing: 0.5px;
+  color: var(--slate);
+  margin: 0 0 6px;
+}
+
+.tax-invoice-meta-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+  padding: 2px 0;
+}
+
+.tax-invoice-meta-row span:first-child {
+  color: var(--slate);
+}
+
+.tax-invoice-table-wrapper {
+  overflow-x: auto;
+  margin-bottom: 16px;
+}
+
+.tax-invoice-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+}
+
+.tax-invoice-table th {
+  text-transform: uppercase;
+  font-size: 11px;
+  letter-spacing: 0.5px;
+  color: var(--slate);
+  border-bottom: 1px solid var(--hairline);
+  padding: 8px;
+  white-space: nowrap;
+}
+
+.tax-invoice-table td {
+  padding: 8px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.tax-invoice-table .align-left {
+  text-align: left;
+}
+
+.tax-invoice-table .align-center {
+  text-align: center;
+}
+
+.tax-invoice-table .align-right {
+  text-align: right;
+}
+
+.tax-invoice-total-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin: 16px 0;
+  padding: 12px 0;
+  border-top: 1px solid var(--hairline);
+  border-bottom: 1px solid var(--hairline);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Narrow, right-aligned — not full width. Reuses .bill-tax-summary-ladder-row (defined
+   in the RETAIL section above) directly, no new row styling. */
+.tax-invoice-tax-summary-region {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 16px;
+}
+
+.tax-invoice-tax-summary {
+  width: 260px;
+}
+
+.tax-invoice-footer {
+  text-align: center;
+  color: var(--slate);
+  font-size: 13px;
+}
+
+/* ==================== RESTAURANT skin ====================
+   docs/TEMPLATE_SYSTEM_v2.md §4.1 — reuses RETAIL's stacked mobile-card architecture
+   directly (same width/padding as .bill-card--retail so the shared, unscoped
+   bill-item-stack, bill-tax-summary-ladder-row and bill-grand-total rules apply
+   unmodified). Visually distinct via a rounder radius and a --primary accent on the
+   merchant name/badge — same tokens as every other skin, no new colors. */
+.bill-card--restaurant {
+  max-width: 400px;
+  padding: 24px;
+  border-radius: 16px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+.bill-card--restaurant .bill-header {
+  margin-bottom: 16px;
+}
+
+.bill-card--restaurant .bill-merchant-name {
+  font-size: 21px;
+  font-weight: 800;
+  color: var(--primary);
+  margin: 0 0 4px;
+}
+
+.bill-card--restaurant .bill-receipt-label {
+  margin: 0;
+  color: var(--slate);
+}
+
+.bill-card--restaurant .bill-receipt-number,
+.bill-card--restaurant .bill-header-date {
+  color: var(--slate);
+  font-size: 14px;
+  margin: 4px 0 0;
+}
+
+.bill-card--restaurant .bill-paid-badge {
+  /* Stays --semantic-success (the base .bill-paid-badge rule) — "PAID" keeping its
+     success-green meaning consistently across every skin matters more here than
+     matching the restaurant accent color. */
+  position: absolute;
+  top: 24px;
+  right: 24px;
+}
+
+.bill-card--restaurant .bill-merchant-info,
+.bill-card--restaurant .bill-meta,
+.bill-card--restaurant .bill-items-stack,
+.bill-card--restaurant .bill-total,
+.bill-card--restaurant .bill-tax-summary,
+.bill-card--restaurant .bill-survey,
+.bill-card--restaurant .bill-footer {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--hairline);
+}
+
+.bill-card--restaurant .bill-merchant-info {
+  color: var(--slate);
+}
+
+.bill-card--restaurant .bill-merchant-info p {
+  margin: 0 0 2px;
+}
+
+.bill-card--restaurant .bill-gstin {
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
+}
+
+/* BILL_META (§3 #3) — bill no. only in practice (no date field yet, see the
+   RenderedBlock comment in template-renderer.ts). Small muted meta line. */
+.bill-meta {
+  display: flex;
+  justify-content: space-between;
+  color: var(--slate);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.bill-card--restaurant .bill-total {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.bill-card--restaurant .bill-total-label {
+  color: var(--slate);
+}
+
+.bill-card--restaurant .bill-amount {
+  font-size: 22px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.bill-card--restaurant .bill-footer {
+  color: var(--slate);
+  font-size: 14px;
+  text-align: center;
+}
+
+/* GRAND TOTAL (restaurant only) — label-left/amount-right row instead of the
+   centered stacked block RETAIL/base uses, matching the ITEM/TOTAL row pattern
+   already used elsewhere on this bill. Lives inside the same card, no detached
+   background section underneath. */
+.bill-card--restaurant .bill-grand-total {
+  display: flex;
+  flex-direction: row;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 16px;
+  padding: 16px 0 0;
+  border-top: 2px solid var(--ink);
+  background: none;
+  text-align: left;
+}
+
+.bill-card--restaurant .bill-grand-total-label {
+  font-weight: 700;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.bill-card--restaurant .bill-grand-total-value {
+  font-size: 24px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Torn-receipt zigzag edge, drawn immediately above the COUPON banner so it
+   reads as a cut edge of the card separating the bill body from the coupon.
+   var(--surface) fill, since that's the card's own background (no
+   --surface-2 token exists in UI_STYLE_v1.md). */
+.bill-card--restaurant .bill-coupon::before {
+  content: '';
+  display: block;
+  height: 14px;
+  margin: 16px -24px 0;
+  background:
+    linear-gradient(135deg, var(--surface) 50%, transparent 50%) 0 0,
+    linear-gradient(225deg, var(--surface) 50%, transparent 50%) 0 0;
+  background-size: 14px 14px;
+  background-repeat: repeat-x;
+}
+
+/* COUPON (restaurant only) — full-bleed colored banner, last block in the card
+   (see seed.ts order), so rounded-bottom-only corners are safe: nothing
+   renders below it to break the card shape. */
+.bill-card--restaurant .bill-coupon {
+  margin: 0 -24px -24px;
+  padding: 20px 24px 24px;
+  background: linear-gradient(135deg, var(--primary) 0%, #b8792a 100%);
+  border: none;
+  border-radius: 0 0 16px 16px;
+  color: #fff;
+  text-align: center;
+}
+
+.bill-card--restaurant .bill-coupon-headline {
+  font-size: 18px;
+  font-weight: 700;
+  margin: 0 0 4px;
+}
+
+.bill-card--restaurant .bill-coupon-code {
+  display: inline-block;
+  background: rgba(255, 255, 255, 0.22);
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
+  letter-spacing: 1px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  margin: 0 0 8px;
+}
+
+.bill-card--restaurant .bill-coupon-validity {
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 13px;
+  margin: 0;
+}
+
+.bill-card--restaurant .bill-coupon-cta {
+  color: #fff;
+  text-decoration: underline;
 }
 
 .btn-download,

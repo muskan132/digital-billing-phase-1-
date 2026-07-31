@@ -10,16 +10,27 @@ const SEEDED_LAYOUT_SCHEMA: LayoutBlock[] = [
   { type: 'FOOTER', order: 6, props: {} },
 ];
 
-// Mirrors apps/api/prisma/seed.ts's taxInvoiceTemplateData.layoutSchema (T-2). No
-// shared source between the two packages — kept in sync by hand; see the "known gap"
-// noted in T-2's summary about a possible future shared-constants/runtime check.
+// Mirrors apps/api/prisma/seed.ts's taxInvoiceTemplateData.layoutSchema exactly (BUG 1
+// + BUG 2 fixes). No shared source between the two packages — kept in sync by hand; see
+// the "known gap" noted in T-2's summary about a possible future shared-constants/
+// runtime check.
+const TAX_COMPLIANT_ITEMS_COLUMNS: ColumnConfig[] = [
+  { field: 'name', label: 'DESCRIPTION', visible: true, align: 'left' },
+  { field: 'hsn', label: 'HSN', visible: true, align: 'left' },
+  { field: 'quantity', label: 'QTY', visible: true, align: 'center' },
+  { field: 'unitPricePaise', label: 'RATE', visible: true, align: 'right' },
+  { field: 'taxRateBp', label: 'GST%', visible: true, align: 'right' },
+  { field: 'amountPaise', label: 'AMOUNT', visible: true, align: 'right' },
+];
+
 const SEEDED_TAX_COMPLIANT_LAYOUT_SCHEMA: LayoutBlock[] = [
   { type: 'HEADER', order: 1, props: {} },
-  { type: 'MERCHANT_INFO', order: 2, props: {} },
-  { type: 'ITEMS', order: 3, props: {} },
-  { type: 'TAX_SUMMARY', order: 4, props: {} },
-  { type: 'TOTAL', order: 5, props: {} },
-  { type: 'FOOTER', order: 6, props: {} },
+  { type: 'MERCHANT_INFO', order: 2, props: { variant: 'tax_invoice' } },
+  { type: 'ITEMS', order: 3, props: { columns: TAX_COMPLIANT_ITEMS_COLUMNS, secondaryFields: [] } },
+  { type: 'TOTAL', order: 4, props: { basis: 'pre_tax' } },
+  { type: 'TAX_SUMMARY', order: 5, props: { mode: 'auto' } },
+  { type: 'AMOUNT_PAYABLE', order: 6, props: {} },
+  { type: 'FOOTER', order: 7, props: {} },
 ];
 
 // Mirrors apps/api/prisma/seed.ts's retailTemplateData.layoutSchema exactly (kept in
@@ -47,6 +58,32 @@ const SEEDED_RETAIL_LAYOUT_SCHEMA: LayoutBlock[] = [
   },
   { type: 'SURVEY', order: 10, props: { prompt: 'How was your shopping experience today?', type: 'rating', url: 'https://example.test/survey' } },
   { type: 'FOOTER', order: 11, props: {} },
+];
+
+// Mirrors apps/api/prisma/seed.ts's restaurantTemplateData.layoutSchema exactly (kept
+// in sync by hand, same known gap as the other SEEDED_*_LAYOUT_SCHEMA fixtures above).
+const RESTAURANT_ITEMS_COLUMNS: ColumnConfig[] = [
+  { field: 'name', label: 'ITEM', visible: true, align: 'left' },
+  { field: 'quantity', label: 'QTY', visible: true, align: 'left' },
+  { field: 'unitPricePaise', label: 'RATE', visible: false, align: 'right' },
+  { field: 'amountPaise', label: 'AMOUNT', visible: true, align: 'right' },
+];
+
+const SEEDED_RESTAURANT_LAYOUT_SCHEMA: LayoutBlock[] = [
+  { type: 'HEADER', order: 1, props: {} },
+  { type: 'MERCHANT_INFO', order: 2, props: {} },
+  { type: 'BILL_META', order: 3, props: {} },
+  { type: 'ITEMS', order: 4, props: { columns: RESTAURANT_ITEMS_COLUMNS, secondaryFields: [] } },
+  { type: 'TOTAL', order: 5, props: { basis: 'pre_tax' } },
+  { type: 'TAX_SUMMARY', order: 6, props: { mode: 'auto' } },
+  { type: 'AMOUNT_PAYABLE', order: 7, props: {} },
+  { type: 'FOOTER', order: 8, props: {} },
+  {
+    type: 'COUPON',
+    order: 9,
+    props: { headline: 'Free dessert on your next visit!', code: 'QSR-SWEET', validity: 'Valid for 30 days', ctaLabel: 'Show this at the counter' },
+  },
+  { type: 'SURVEY', order: 10, props: { prompt: 'How was your meal today?', type: 'rating', url: 'https://example.test/survey' } },
 ];
 
 // Mirrors the snapshot shape apps/api/src/callbacks/callbacks.service.ts (P-1) writes.
@@ -155,6 +192,7 @@ describe('renderTemplate', () => {
       },
       {
         type: 'MERCHANT_INFO',
+        kind: 'receipt',
         addressLine1: '221, Linking Road',
         addressLine2: 'Bandra West',
         city: 'Mumbai',
@@ -244,7 +282,103 @@ describe('renderTemplate', () => {
   it('renders the seeded TAX_COMPLIANT layoutSchema (T-2) end-to-end without throwing', () => {
     const result = renderTemplate(SEEDED_TAX_COMPLIANT_LAYOUT_SCHEMA, SAMPLE_SNAPSHOT, SAMPLE_MERCHANT);
 
-    expect(result.map((block) => block.type)).toEqual(['HEADER', 'MERCHANT_INFO', 'ITEMS', 'TAX_SUMMARY', 'TOTAL', 'FOOTER']);
+    expect(result.map((block) => block.type)).toEqual([
+      'HEADER',
+      'MERCHANT_INFO',
+      'ITEMS',
+      'TOTAL',
+      'TAX_SUMMARY',
+      'AMOUNT_PAYABLE',
+      'FOOTER',
+    ]);
+  });
+
+  // ---- BUG 1 fix: MERCHANT_INFO 'tax_invoice' kind — sourced from the frozen
+  // snapshot, never the live merchant param (BR-2 immutability). ----
+
+  it('BUG 1 fix: MERCHANT_INFO with props.variant "tax_invoice" sources seller info + invoice meta from the snapshot, not the live merchant', () => {
+    const liveMerchantWithDifferentData: BillMerchant = {
+      ...SAMPLE_MERCHANT,
+      name: 'A DIFFERENT CURRENT NAME',
+      gstin: '99ZZZZZ0000Z1Z9',
+    };
+
+    const result = renderTemplate(
+      [{ type: 'MERCHANT_INFO', order: 1, props: { variant: 'tax_invoice' } }],
+      TAX_INVOICE_SNAPSHOT,
+      liveMerchantWithDifferentData,
+    );
+
+    expect(result).toEqual([
+      {
+        type: 'MERCHANT_INFO',
+        kind: 'tax_invoice',
+        merchantName: 'Demo Merchant', // from TAX_INVOICE_SNAPSHOT.merchantName, not the live merchant's "A DIFFERENT CURRENT NAME"
+        address: undefined, // TAX_INVOICE_SNAPSHOT has no merchantAddress set in this fixture
+        gstin: '27ABCDE1234F1Z5', // from TAX_INVOICE_SNAPSHOT.merchantGstin, not the live merchant's "99ZZZZZ..."
+        invoiceNumber: 'INV-2026-0001',
+        placeOfSupply: '27',
+      },
+    ]);
+  });
+
+  it('BUG 1 fix: MERCHANT_INFO without props.variant keeps the existing "receipt" behavior (other skeletons unaffected)', () => {
+    const result = renderTemplate([{ type: 'MERCHANT_INFO', order: 1, props: {} }], TAX_INVOICE_SNAPSHOT, SAMPLE_MERCHANT);
+
+    const block = result[0];
+    expect(block.type).toBe('MERCHANT_INFO');
+    if (block.type === 'MERCHANT_INFO') expect(block.kind).toBe('receipt');
+  });
+
+  it('BUG 1 fix: TAX_COMPLIANT\'s ITEMS renders "columns" kind with its 6-column DESCRIPTION/HSN/QTY/RATE/GST%/AMOUNT config, no discount column at all', () => {
+    const result = renderTemplate(
+      [{ type: 'ITEMS', order: 1, props: { columns: TAX_COMPLIANT_ITEMS_COLUMNS, secondaryFields: [] } }],
+      TAX_INVOICE_SNAPSHOT,
+      SAMPLE_MERCHANT,
+    );
+
+    const block = result[0];
+    if (block.type !== 'ITEMS' || block.kind !== 'columns') throw new Error('expected columns ITEMS');
+
+    expect(block.columns.map((c) => c.field)).toEqual(['name', 'hsn', 'quantity', 'unitPricePaise', 'taxRateBp', 'amountPaise']);
+    expect(block.columns.every((c) => c.visible)).toBe(true); // all 6 visible, unlike RETAIL's hidden RATE
+    expect(block.secondaryFields).toEqual([]); // HSN is a real column here, not a muted secondary line
+    expect(block.rows[0].fields.amountPaise).toBe('21000'); // 20000 taxable + 1000 tax
+  });
+
+  it('BUG 1 fix: a <script> in an item name passes through the TAX_COMPLIANT columns-driven ITEMS unmodified as plain data', () => {
+    const maliciousName = '<script>alert(1)</script>';
+    const snapshot: BillSnapshot = { ...TAX_INVOICE_SNAPSHOT, items: [{ ...TAX_INVOICE_ITEMS[0], name: maliciousName }] };
+
+    const result = renderTemplate(
+      [{ type: 'ITEMS', order: 1, props: { columns: TAX_COMPLIANT_ITEMS_COLUMNS, secondaryFields: [] } }],
+      snapshot,
+      SAMPLE_MERCHANT,
+    );
+
+    const block = result[0];
+    if (block.type !== 'ITEMS' || block.kind !== 'columns') throw new Error('expected columns ITEMS');
+    expect(block.rows[0].fields.name).toBe(maliciousName);
+  });
+
+  // ---- BUG 2 fix: TAX_COMPLIANT now reuses RETAIL's exact aggregate/pre_tax logic ----
+
+  it('BUG 2 fix: TAX_COMPLIANT\'s TAX_SUMMARY now renders "aggregate", not "legacy_matrix"', () => {
+    const result = renderTemplate(
+      [{ type: 'TAX_SUMMARY', order: 1, props: { mode: 'auto' } }],
+      TAX_INVOICE_SNAPSHOT,
+      SAMPLE_MERCHANT,
+    );
+
+    const block = result[0];
+    expect(block.type).toBe('TAX_SUMMARY');
+    if (block.type === 'TAX_SUMMARY') expect(block.kind).toBe('aggregate');
+  });
+
+  it('BUG 2 fix: TAX_COMPLIANT\'s TOTAL now shows the pre-tax figure, matching RETAIL', () => {
+    const result = renderTemplate([{ type: 'TOTAL', order: 1, props: { basis: 'pre_tax' } }], TAX_INVOICE_SNAPSHOT, SAMPLE_MERCHANT);
+
+    expect(result).toEqual([{ type: 'TOTAL', kind: 'pre_tax', totalPaise: '25000', currency: 'INR' }]);
   });
 
   // ---- V-5: itemized ITEMS ----
@@ -665,6 +799,90 @@ describe('renderTemplate', () => {
     const maliciousName = '<script>alert(1)</script>';
     const snapshot: BillSnapshot = { ...TAX_INVOICE_SNAPSHOT, items: [{ ...TAX_INVOICE_ITEMS[0], name: maliciousName }] };
     const block: LayoutBlock = { type: 'ITEMS', order: 1, props: { columns: RETAIL_ITEMS_COLUMNS, secondaryFields: ['hsn'] } };
+
+    const result = renderTemplate([block], snapshot, SAMPLE_MERCHANT);
+
+    const itemsBlock = result[0];
+    if (itemsBlock.type !== 'ITEMS' || itemsBlock.kind !== 'columns') throw new Error('expected columns ITEMS');
+    expect(itemsBlock.rows[0].fields.name).toBe(maliciousName);
+  });
+
+  // ==================== RESTAURANT/QSR template ====================
+  // Reuses RETAIL's architecture directly — same 'columns' ITEMS, 'pre_tax' TOTAL,
+  // 'aggregate' TAX_SUMMARY, AMOUNT_PAYABLE, COUPON/SURVEY rendering. Only new: the
+  // BILL_META block type and this seed config (no quantity-as-separate-column, no HSN
+  // at all, no SAVINGS/LOYALTY).
+
+  it('RESTAURANT: renders the full seeded layoutSchema end-to-end without throwing, in order', () => {
+    const result = renderTemplate(SEEDED_RESTAURANT_LAYOUT_SCHEMA, TAX_INVOICE_SNAPSHOT, SAMPLE_MERCHANT);
+
+    expect(result.map((block) => block.type)).toEqual([
+      'HEADER',
+      'MERCHANT_INFO',
+      'BILL_META',
+      'ITEMS',
+      'TOTAL',
+      'TAX_SUMMARY',
+      'AMOUNT_PAYABLE',
+      'FOOTER',
+      'COUPON',
+      'SURVEY',
+    ]);
+  });
+
+  it('RESTAURANT: BILL_META renders billNumber from snapshot.invoiceNumber; date is always undefined (no data source yet)', () => {
+    const result = renderTemplate([{ type: 'BILL_META', order: 1, props: {} }], TAX_INVOICE_SNAPSHOT, SAMPLE_MERCHANT);
+
+    expect(result).toEqual([{ type: 'BILL_META', billNumber: 'INV-2026-0001', date: undefined }]);
+  });
+
+  it('RESTAURANT: BILL_META with no invoiceNumber on the snapshot still doesn\'t throw', () => {
+    const snapshot: BillSnapshot = { ...TAX_INVOICE_SNAPSHOT, invoiceNumber: undefined };
+    const result = renderTemplate([{ type: 'BILL_META', order: 1, props: {} }], snapshot, SAMPLE_MERCHANT);
+
+    expect(result).toEqual([{ type: 'BILL_META', billNumber: undefined, date: undefined }]);
+  });
+
+  it('RESTAURANT: ITEMS config has no hsn field anywhere (not a column, not a secondaryField) and quantity is present for the name-fold', () => {
+    const result = renderTemplate(
+      [{ type: 'ITEMS', order: 1, props: { columns: RESTAURANT_ITEMS_COLUMNS, secondaryFields: [] } }],
+      TAX_INVOICE_SNAPSHOT,
+      SAMPLE_MERCHANT,
+    );
+
+    const block = result[0];
+    if (block.type !== 'ITEMS' || block.kind !== 'columns') throw new Error('expected columns ITEMS');
+
+    expect(block.columns.some((c) => c.field === 'hsn')).toBe(false);
+    expect(block.secondaryFields).toEqual([]);
+    expect(block.columns.find((c) => c.field === 'quantity')).toBeDefined();
+    // The row data still carries hsn (computed generically for every columns-driven
+    // ITEMS block) — it's the CONFIG that excludes it from ever being displayed.
+    expect(block.rows[0].fields.hsn).toBe('8471');
+  });
+
+  it('RESTAURANT: TAX_SUMMARY reuses the exact same aggregate structure as RETAIL — no reimplementation', () => {
+    const result = renderTemplate([{ type: 'TAX_SUMMARY', order: 1, props: { mode: 'auto' } }], TAX_INVOICE_SNAPSHOT, SAMPLE_MERCHANT);
+
+    expect(result).toEqual([
+      {
+        type: 'TAX_SUMMARY',
+        kind: 'aggregate',
+        isIntraState: true,
+        taxableValuePaise: '25000',
+        cgstPaise: '950',
+        sgstPaise: '950',
+        igstPaise: '0',
+        totalTaxPaise: '1900',
+        currency: 'INR',
+      },
+    ]);
+  });
+
+  it('RESTAURANT: a <script> in an item name passes through the columns-driven ITEMS unmodified as plain data', () => {
+    const maliciousName = '<script>alert(1)</script>';
+    const snapshot: BillSnapshot = { ...TAX_INVOICE_SNAPSHOT, items: [{ ...TAX_INVOICE_ITEMS[0], name: maliciousName }] };
+    const block: LayoutBlock = { type: 'ITEMS', order: 1, props: { columns: RESTAURANT_ITEMS_COLUMNS, secondaryFields: [] } };
 
     const result = renderTemplate([block], snapshot, SAMPLE_MERCHANT);
 

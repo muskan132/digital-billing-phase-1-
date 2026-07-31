@@ -29,6 +29,7 @@ enum TemplateSkeleton {
   COMPACT_THERMAL
   TAX_COMPLIANT
   RETAIL
+  RESTAURANT
 }
 
 enum OrderStatus {

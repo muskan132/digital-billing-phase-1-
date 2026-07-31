@@ -12,6 +12,7 @@ const TEMPLATE_RECEIPT_MINIMALIST_ID = 'seed-template-receipt';
 const TEMPLATE_RECEIPT_THERMAL_ID = 'seed-template-receipt-thermal';
 const TEMPLATE_TAX_INVOICE_ID = 'seed-template-tax-invoice';
 const TEMPLATE_RETAIL_ID = 'seed-template-retail';
+const TEMPLATE_RESTAURANT_ID = 'seed-template-restaurant';
 const MERCHANT_API_KEY_ID = 'seed-merchant-api-key-demo';
 const DEMO_API_KEY_FILE = path.join(__dirname, '..', '.demo-api-key.local');
 
@@ -126,17 +127,34 @@ async function main() {
     name: 'Tax Invoice (TAX_COMPLIANT)',
     billType: 'TAX_INVOICE' as const,
     skeleton: 'TAX_COMPLIANT' as const,
-    // T-2: TAX_SUMMARY added to the block-type enum (D-10) and to this layout, between
-    // ITEMS and TOTAL. TAX_SUMMARY renders nothing yet — the real CGST/SGST/IGST-by-rate
-    // breakdown is V-5's job, once L-3 exposes items[] data to the renderer. The
-    // itemized ITEMS layout itself is also still V-5's job, not this one.
+    // BUG 1 + BUG 2 fixes (tracked in memory: project_tax_compliant_known_bugs.md) —
+    // MERCHANT_INFO/ITEMS/TOTAL/TAX_SUMMARY/AMOUNT_PAYABLE all reuse the exact same
+    // rendering logic RETAIL already ships, opted into via the same props triggers
+    // (variant/columns/basis/mode) — no new rendering logic, only a document-width
+    // layout (TaxInvoiceCard.tsx) and this config. No invoice date: still no date field
+    // anywhere in Bill.snapshot — tracked separately, not fabricated here.
     layoutSchema: [
       { type: 'HEADER', order: 1, props: {} },
-      { type: 'MERCHANT_INFO', order: 2, props: {} },
-      { type: 'ITEMS', order: 3, props: {} },
-      { type: 'TAX_SUMMARY', order: 4, props: {} },
-      { type: 'TOTAL', order: 5, props: {} },
-      { type: 'FOOTER', order: 6, props: {} },
+      { type: 'MERCHANT_INFO', order: 2, props: { variant: 'tax_invoice' } },
+      {
+        type: 'ITEMS',
+        order: 3,
+        props: {
+          columns: [
+            { field: 'name', label: 'DESCRIPTION', visible: true, align: 'left' },
+            { field: 'hsn', label: 'HSN', visible: true, align: 'left' },
+            { field: 'quantity', label: 'QTY', visible: true, align: 'center' },
+            { field: 'unitPricePaise', label: 'RATE', visible: true, align: 'right' },
+            { field: 'taxRateBp', label: 'GST%', visible: true, align: 'right' },
+            { field: 'amountPaise', label: 'AMOUNT', visible: true, align: 'right' },
+          ],
+          secondaryFields: [],
+        },
+      },
+      { type: 'TOTAL', order: 4, props: { basis: 'pre_tax' } },
+      { type: 'TAX_SUMMARY', order: 5, props: { mode: 'auto' } },
+      { type: 'AMOUNT_PAYABLE', order: 6, props: {} },
+      { type: 'FOOTER', order: 7, props: {} },
     ],
   };
   await prisma.template.upsert({
@@ -219,6 +237,74 @@ async function main() {
     where: { id: TEMPLATE_RETAIL_ID },
     create: { id: TEMPLATE_RETAIL_ID, ...retailTemplateData },
     update: retailTemplateData,
+  });
+
+  // RESTAURANT/QSR template — docs/TEMPLATE_SYSTEM_v2.md §4.1. Reuses RETAIL's
+  // architecture directly (same billType/TAX_INVOICE reasoning, same rendering logic
+  // for ITEMS/TOTAL/TAX_SUMMARY/AMOUNT_PAYABLE/COUPON/SURVEY — no new logic, only new
+  // config). No SAVINGS/LOYALTY (not relevant to a single-visit dine-in bill).
+  const restaurantTemplateData = {
+    merchantId: null,
+    name: 'Restaurant / QSR (RESTAURANT)',
+    billType: 'TAX_INVOICE' as const,
+    skeleton: 'RESTAURANT' as const,
+    layoutSchema: [
+      { type: 'HEADER', order: 1, props: {} },
+      { type: 'MERCHANT_INFO', order: 2, props: {} },
+      // §3 #3: bill no. + date only — no table number, no server name (staff-internal,
+      // not customer-useful, per explicit feedback). Date never renders in practice:
+      // no date field anywhere in Bill.snapshot yet (tracked in memory, not fabricated).
+      { type: 'BILL_META', order: 3, props: {} },
+      {
+        type: 'ITEMS',
+        order: 4,
+        props: {
+          // name + amount only, per §4.1 — quantity folds into the name label at
+          // render time ("Paneer Tikka x 1"), it is never its own cell (same
+          // columns-driven renderer RETAIL uses — this is existing behavior, not new).
+          // HSN is absent entirely, not even as a muted secondaryFields line — a diner
+          // doesn't need it, unlike a retail customer.
+          columns: [
+            { field: 'name', label: 'ITEM', visible: true, align: 'left' },
+            { field: 'quantity', label: 'QTY', visible: true, align: 'left' },
+            { field: 'unitPricePaise', label: 'RATE', visible: false, align: 'right' },
+            { field: 'amountPaise', label: 'AMOUNT', visible: true, align: 'right' },
+          ],
+          secondaryFields: [],
+        },
+      },
+      { type: 'TOTAL', order: 5, props: { basis: 'pre_tax' } },
+      { type: 'TAX_SUMMARY', order: 6, props: { mode: 'auto' } },
+      { type: 'AMOUNT_PAYABLE', order: 7, props: {} },
+      { type: 'FOOTER', order: 8, props: {} },
+      {
+        type: 'SURVEY',
+        order: 9,
+        props: {
+          prompt: 'How was your meal today?',
+          type: 'rating',
+          url: 'https://example.test/survey',
+        },
+      },
+      // Last block in the stack — its full-bleed banner treatment (rounded bottom
+      // corners matching the card) depends on being the final element, same
+      // reasoning as the AMOUNT_PAYABLE bleed-math fix above.
+      {
+        type: 'COUPON',
+        order: 10,
+        props: {
+          headline: 'Free dessert on your next visit!',
+          code: 'QSR-SWEET',
+          validity: 'Valid for 30 days',
+          ctaLabel: 'Show this at the counter',
+        },
+      },
+    ],
+  };
+  await prisma.template.upsert({
+    where: { id: TEMPLATE_RESTAURANT_ID },
+    create: { id: TEMPLATE_RESTAURANT_ID, ...restaurantTemplateData },
+    update: restaurantTemplateData,
   });
 
   await prisma.merchant.update({

@@ -1,26 +1,27 @@
 import { RenderedBlock } from './template-renderer';
 import { formatMoney } from './money-format';
-
-function isPresent(value: string | null | undefined): value is string {
-  return value != null && value !== '';
-}
-
-const MONEY_FIELDS = new Set(['unitPricePaise', 'discountPaise', 'taxableValuePaise', 'taxPaise', 'amountPaise']);
-
-// Generic field formatter for RETAIL's columns-driven rows (§2/§9) — the renderer
-// knows field TYPES (money vs rate vs plain), not field NAMES for layout purposes.
-function formatFieldValue(field: string, value: string | number | undefined, currency: string): string {
-  if (value === undefined) return '';
-  if (MONEY_FIELDS.has(field)) return formatMoney(String(value), currency);
-  if (field === 'taxRateBp') return `${Number(value) / 100}%`;
-  return String(value);
-}
+import { TaxInvoiceCard } from './TaxInvoiceCard';
+import { isPresent, formatFieldValue } from './render-helpers';
 
 // One component per known block type — a broken block should never take down the
 // rest of the bill (docs/UI_STYLE_v1.md: "a broken widget/asset hides that block, it
 // never breaks the rest of the bill"), so each case renders independently.
 export function BillBlocks({ blocks, skeleton }: { blocks: RenderedBlock[]; skeleton: string }) {
-  const skin = skeleton === 'COMPACT_THERMAL' ? 'thermal' : skeleton === 'RETAIL' ? 'retail' : 'minimalist';
+  // TAX_COMPLIANT (BUG 1): document-width layout with two-column regions can't fit the
+  // generic vertical per-block stacker below — a dedicated component owns its own
+  // composition instead, picking specific blocks by type out of the same array.
+  if (skeleton === 'TAX_COMPLIANT') {
+    return <TaxInvoiceCard blocks={blocks} />;
+  }
+
+  const skin =
+    skeleton === 'COMPACT_THERMAL'
+      ? 'thermal'
+      : skeleton === 'RETAIL'
+        ? 'retail'
+        : skeleton === 'RESTAURANT'
+          ? 'restaurant'
+          : 'minimalist';
 
   return (
     <div className={`bill-card bill-card--${skin}`}>
@@ -47,6 +48,10 @@ function BillBlock({ block, skin }: { block: RenderedBlock; skin: string }) {
       );
 
     case 'MERCHANT_INFO': {
+      // 'tax_invoice' is rendered by TaxInvoiceCard.tsx, not here — this generic
+      // per-block stacker is only ever handed 'receipt' blocks (BillBlocks branches to
+      // TaxInvoiceCard before reaching this switch for the TAX_COMPLIANT skeleton).
+      if (block.kind !== 'receipt') return null;
       const addressLines = [block.addressLine1, block.addressLine2].filter(isPresent);
       const cityLine = [block.city, block.state, block.pincode].filter(isPresent).join(', ');
       if (addressLines.length === 0 && !cityLine && !isPresent(block.gstin)) return null;
@@ -57,6 +62,18 @@ function BillBlock({ block, skin }: { block: RenderedBlock; skin: string }) {
           ))}
           {cityLine !== '' && <p>{cityLine}</p>}
           {isPresent(block.gstin) && <p className="bill-gstin">GSTIN: {block.gstin}</p>}
+        </div>
+      );
+    }
+
+    case 'BILL_META': {
+      // date is always undefined today — see the RenderedBlock comment in
+      // template-renderer.ts. Only Bill No. renders in practice.
+      if (!isPresent(block.billNumber) && !isPresent(block.date)) return null;
+      return (
+        <div className="bill-meta">
+          {isPresent(block.billNumber) && <span>Bill No. {block.billNumber}</span>}
+          {isPresent(block.date) && <span>{block.date}</span>}
         </div>
       );
     }
