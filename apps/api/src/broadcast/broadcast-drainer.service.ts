@@ -69,6 +69,7 @@ export class BroadcastDrainerService {
         ],
       },
       orderBy: { createdAt: 'asc' },
+      include: { order: { include: { link: true } } },
     });
 
     // Backoff gate: Prisma's declarative `where` can't compare a row's own `attempts`
@@ -84,13 +85,23 @@ export class BroadcastDrainerService {
       // sender's own contract (a bug, not an anticipated vendor failure) is still
       // caught here as a defensive fallback, using the raw error message as before.
       let failure: { reasonCode: string; message: string } | null = null;
-      try {
-        const result = await this.sender.sendBroadcast({ channel: row.channel, recipient: row.recipient });
-        if (!result.sent) {
-          failure = { reasonCode: result.reasonCode, message: result.message };
+      const identifier = row.order.link?.identifier;
+      if (!identifier) {
+        // Link/Broadcast are created together in the same P-2 transaction, so this
+        // shouldn't happen — but a broadcast with no link to point at is useless, so
+        // treat it as a failure (retried like any other) rather than sending a
+        // linkless message.
+        failure = { reasonCode: 'missing_link', message: `Broadcast ${row.id} has no associated Link` };
+      } else {
+        const billUrl = `${process.env.PUBLIC_BILL_BASE_URL}/${identifier}`;
+        try {
+          const result = await this.sender.sendBroadcast({ channel: row.channel, recipient: row.recipient, billUrl });
+          if (!result.sent) {
+            failure = { reasonCode: result.reasonCode, message: result.message };
+          }
+        } catch (err) {
+          failure = { reasonCode: 'unexpected_error', message: err instanceof Error ? err.message : String(err) };
         }
-      } catch (err) {
-        failure = { reasonCode: 'unexpected_error', message: err instanceof Error ? err.message : String(err) };
       }
 
       if (failure === null) {

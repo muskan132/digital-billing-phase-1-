@@ -3,6 +3,9 @@ import { Channel } from '@prisma/client';
 export interface BroadcastSendInput {
   channel: Channel;
   recipient: string;
+  // Not PII — the bill's own public URL, safe to appear in logs and message bodies
+  // unmasked, unlike `recipient`.
+  billUrl: string;
 }
 
 // Failure is a sanitized value, not a thrown vendor error: nodemailer's rejection

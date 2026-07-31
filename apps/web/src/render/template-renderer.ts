@@ -10,6 +10,10 @@ import { formatCallbackDateTime } from './date-format';
 // BILL_META added for RESTAURANT/QSR (§3 catalogue #3, §4.1) — bill no. + date only,
 // no table number/server name (staff-internal, not customer-useful per explicit
 // feedback).
+// QR_CODE added for RETAIL — unlike every type above, this one is NOT in
+// TEMPLATE_SYSTEM_v2.md §3's 22-block catalogue at all, so it's genuinely new, not a
+// pre-documented gap being filled. Engagement placeholder (scan for an offer), not a
+// link back to the bill itself. RETAIL only for now.
 const KNOWN_BLOCK_TYPES = [
   'HEADER',
   'MERCHANT_INFO',
@@ -23,6 +27,7 @@ const KNOWN_BLOCK_TYPES = [
   'LOYALTY',
   'COUPON',
   'SURVEY',
+  'QR_CODE',
   'FOOTER',
 ] as const;
 type BlockType = (typeof KNOWN_BLOCK_TYPES)[number];
@@ -273,6 +278,12 @@ export type RenderedBlock =
     }
   // §3 catalogue #20 — same as COUPON: template-authored static copy.
   | { type: 'SURVEY'; prompt: string | undefined; surveyType: string | undefined; url: string | undefined }
+  // Not in §3's catalogue at all — genuinely new, RETAIL only (see KNOWN_BLOCK_TYPES
+  // comment). `path` is template-authored static copy, same pattern as COUPON/SURVEY —
+  // combining it with PUBLIC_BILL_BASE_URL and generating the actual QR image happens
+  // in BillBlocks.tsx, not here, since that's where env-var/image-generation concerns
+  // already live, keeping this function free of I/O.
+  | { type: 'QR_CODE'; path: string | undefined; caption: string | undefined }
   | {
       type: 'FOOTER';
       supportEmail: string | null | undefined;
@@ -505,6 +516,13 @@ function renderBlock(block: LayoutBlock, snapshot: BillSnapshot, merchant: BillM
         prompt: typeof block.props.prompt === 'string' ? block.props.prompt : undefined,
         surveyType: typeof block.props.type === 'string' ? block.props.type : undefined,
         url: typeof block.props.url === 'string' ? block.props.url : undefined,
+      };
+    case 'QR_CODE':
+      // Template-authored static copy, frozen into layoutSnapshot at issue time.
+      return {
+        type: 'QR_CODE',
+        path: typeof block.props.path === 'string' ? block.props.path : undefined,
+        caption: typeof block.props.caption === 'string' ? block.props.caption : undefined,
       };
     case 'FOOTER':
       return {

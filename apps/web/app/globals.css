@@ -341,10 +341,25 @@ body {
 .bill-card--retail .bill-loyalty,
 .bill-card--retail .bill-coupon,
 .bill-card--retail .bill-survey,
+.bill-card--retail .bill-qr-code,
 .bill-card--retail .bill-footer--retail {
   margin-top: 12px;
   padding-top: 12px;
   border-top: 1px solid var(--hairline);
+}
+
+.bill-card--retail .bill-qr-code {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.bill-card--retail .bill-qr-code-caption {
+  margin: 0;
+  color: var(--slate);
+  font-size: 12px;
+  text-align: center;
 }
 
 .bill-card--retail .bill-merchant-info {
@@ -926,4 +941,117 @@ body {
     break-inside: avoid;
     page-break-inside: avoid;
   }
+}
+
+/* Demo control panel — internal operator tool, not a customer-facing bill skin. */
+.demo-panel {
+  max-width: 480px;
+  margin: 40px auto;
+  padding: 0 16px;
+}
+
+.demo-subtitle {
+  color: var(--slate);
+  font-size: 14px;
+  margin: 0 0 24px;
+}
+
+.demo-section {
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+  padding: 20px;
+  margin-bottom: 20px;
+}
+
+.demo-section h2 {
+  font-size: 16px;
+  margin: 0 0 12px;
+}
+
+.demo-section select {
+  display: block;
+  width: 100%;
+  padding: 8px;
+  margin-bottom: 12px;
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+  font-size: 14px;
+}
+
+.demo-section button {
+  background: var(--primary);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 10px 16px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.demo-section button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.demo-item-row {
+  display: grid;
+  grid-template-columns: 2fr 1fr 1.4fr 1fr auto;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.demo-item-row input,
+.demo-item-row select {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.demo-remove-item {
+  background: none;
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+  color: var(--semantic-error);
+  cursor: pointer;
+  padding: 0 8px;
+}
+
+.demo-add-item {
+  background: none;
+  color: var(--primary);
+  border: 1px dashed var(--primary);
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-weight: 600;
+  cursor: pointer;
+  display: block;
+  width: 100%;
+  margin-bottom: 12px;
+}
+
+.demo-add-item:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.demo-result-link {
+  display: block;
+  margin-top: 16px;
+  padding: 12px;
+  background: var(--canvas);
+  border: 1px dashed var(--primary);
+  border-radius: 6px;
+  font-size: 15px;
+  font-weight: 600;
+  word-break: break-all;
+  color: var(--primary);
+}
+
+.demo-error {
+  margin-top: 16px;
+  color: var(--semantic-error);
+  font-size: 14px;
 }

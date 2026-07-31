@@ -16,11 +16,16 @@ describe('BroadcastSenderService', () => {
     errorSpy = jest.spyOn((service as unknown as { logger: { error: jest.Mock } }).logger, 'error');
   });
 
-  it('EMAIL: sends via the SMTP transport and logs a masked recipient', async () => {
-    const result = await service.sendBroadcast({ channel: Channel.EMAIL, recipient: 'jane@example.com' });
+  it('EMAIL: sends via the SMTP transport with the bill URL in the body, and logs a masked recipient', async () => {
+    const result = await service.sendBroadcast({
+      channel: Channel.EMAIL,
+      recipient: 'jane@example.com',
+      billUrl: 'http://localhost:3000/abc123',
+    });
 
     expect(sendMail).toHaveBeenCalledTimes(1);
     expect(sendMail.mock.calls[0][0].to).toBe('jane@example.com');
+    expect(sendMail.mock.calls[0][0].text).toBe('Your bill is ready: http://localhost:3000/abc123');
     expect(result).toEqual({ sent: true });
 
     const logged = logSpy.mock.calls.map((call) => String(call[0])).join('\n');
@@ -28,8 +33,12 @@ describe('BroadcastSenderService', () => {
     expect(logged).toContain('j***@example.com');
   });
 
-  it('SMS: never touches the transport, logs a masked recipient only, and never claims "sent"', async () => {
-    const result = await service.sendBroadcast({ channel: Channel.SMS, recipient: '9876543210' });
+  it('SMS: never touches the transport, logs a masked recipient with the (non-PII) bill URL unmasked, and never claims "sent"', async () => {
+    const result = await service.sendBroadcast({
+      channel: Channel.SMS,
+      recipient: '9876543210',
+      billUrl: 'http://localhost:3000/abc123',
+    });
 
     expect(sendMail).not.toHaveBeenCalled();
     expect(result).toEqual({ sent: true });
@@ -39,6 +48,7 @@ describe('BroadcastSenderService', () => {
     // Nothing was actually transmitted (SMS is log-only) — the log line must say so.
     expect(logged).toContain('SMS stub, no external send');
     expect(logged).not.toContain('Broadcast sent');
+    expect(logged).toContain('http://localhost:3000/abc123');
   });
 
   // D-3/CTO review: nodemailer failures must be caught and sanitized inside the sender,
@@ -47,7 +57,11 @@ describe('BroadcastSenderService', () => {
     const rawError = Object.assign(new Error('Connection timeout for jane@example.com'), { code: 'ETIMEDOUT' });
     sendMail.mockRejectedValue(rawError);
 
-    const result = await service.sendBroadcast({ channel: Channel.EMAIL, recipient: 'jane@example.com' });
+    const result = await service.sendBroadcast({
+      channel: Channel.EMAIL,
+      recipient: 'jane@example.com',
+      billUrl: 'http://localhost:3000/abc123',
+    });
 
     expect(result).toEqual({ sent: false, reasonCode: 'timeout', message: 'SMTP send failed for j***@example.com' });
 
@@ -60,7 +74,11 @@ describe('BroadcastSenderService', () => {
     const rawError = Object.assign(new Error('rejected: jane@example.com'), { code: 'EENVELOPE' });
     sendMail.mockRejectedValue(rawError);
 
-    const result = await service.sendBroadcast({ channel: Channel.EMAIL, recipient: 'jane@example.com' });
+    const result = await service.sendBroadcast({
+      channel: Channel.EMAIL,
+      recipient: 'jane@example.com',
+      billUrl: 'http://localhost:3000/abc123',
+    });
 
     expect(result).toEqual({ sent: false, reasonCode: 'smtp_error', message: 'SMTP send failed for j***@example.com' });
 

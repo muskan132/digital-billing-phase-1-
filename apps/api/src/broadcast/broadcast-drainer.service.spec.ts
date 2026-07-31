@@ -15,6 +15,7 @@ function makeRow(overrides: Partial<Record<string, unknown>> = {}) {
     createdAt: new Date('2026-01-01T00:00:00Z'),
     updatedAt: new Date('2026-01-01T00:00:00Z'),
     sentAt: null,
+    order: { link: { identifier: 'demo-identifier' } },
     ...overrides,
   };
 }
@@ -25,6 +26,10 @@ describe('BroadcastDrainerService', () => {
   let sendBroadcast: jest.Mock;
   let service: BroadcastDrainerService;
   const originalMaxAttemptsEnv = process.env.MAX_BROADCAST_ATTEMPTS;
+
+  beforeAll(() => {
+    process.env.PUBLIC_BILL_BASE_URL = 'http://localhost:3000';
+  });
 
   function makeService() {
     findMany = jest.fn();
@@ -48,7 +53,7 @@ describe('BroadcastDrainerService', () => {
     }
   });
 
-  it('queries PENDING and FAILED-under-max-attempts, ordered by createdAt ascending', async () => {
+  it('queries PENDING and FAILED-under-max-attempts, ordered by createdAt ascending, joining Order->Link for the bill URL', async () => {
     findMany.mockResolvedValue([]);
     await service.drain();
 
@@ -60,22 +65,19 @@ describe('BroadcastDrainerService', () => {
         ],
       },
       orderBy: { createdAt: 'asc' },
+      include: { order: { include: { link: true } } },
     });
   });
 
-  // B-3: this is the structural half of the source-agnosticism proof. The drainer's
-  // query above never selects/joins Order.source or Bill.billType — it filters purely
-  // on Broadcast's own status/attempts. A PG_CALLBACK-sourced and a DIRECT_API-sourced
-  // row are therefore indistinguishable to this query by construction, not by
-  // coincidence: there is no field here a future change could accidentally branch on
-  // without first adding a join that doesn't exist today.
-  it('B-3: the drain query has no Order/Bill relation and no source/billType field, for any row', async () => {
+  // B-3: the drain query's WHERE clause (the eligibility filter) still never
+  // references Order.source or Bill.billType — the Order/Link join added for the bill
+  // URL is a plain relation walk for message content, not a filter condition, so a
+  // PG_CALLBACK-sourced and a DIRECT_API-sourced row remain equally eligible.
+  it('B-3: the drain query\'s WHERE clause has no source/billType field, for any row', async () => {
     findMany.mockResolvedValue([]);
     await service.drain();
 
     const [args] = findMany.mock.calls[0] as [Record<string, unknown>];
-    expect(args).not.toHaveProperty('include');
-    expect(args).not.toHaveProperty('select');
     const serializedWhere = JSON.stringify(args.where);
     expect(serializedWhere).not.toContain('source');
     expect(serializedWhere).not.toContain('billType');
@@ -93,10 +95,31 @@ describe('BroadcastDrainerService', () => {
 
     await service.drain();
 
-    expect(sendBroadcast).toHaveBeenCalledWith({ channel: Channel.EMAIL, recipient: 'diner@example.com' });
+    expect(sendBroadcast).toHaveBeenCalledWith({
+      channel: Channel.EMAIL,
+      recipient: 'diner@example.com',
+      billUrl: 'http://localhost:3000/demo-identifier',
+    });
     expect(update).toHaveBeenCalledWith({
       where: { id: 'invoice-b1' },
       data: { status: BroadcastStatus.SENT, sentAt: expect.any(Date) },
+    });
+  });
+
+  it('a row with no associated Link is treated as a failure, not sent with a linkless message', async () => {
+    const row = makeRow({ id: 'a', order: { link: null } });
+    findMany.mockResolvedValue([row]);
+
+    await service.drain();
+
+    expect(sendBroadcast).not.toHaveBeenCalled();
+    expect(update).toHaveBeenCalledWith({
+      where: { id: 'a' },
+      data: {
+        status: BroadcastStatus.FAILED,
+        attempts: { increment: 1 },
+        error: expect.stringContaining('missing_link'),
+      },
     });
   });
 

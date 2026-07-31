@@ -230,7 +230,19 @@ async function main() {
           url: 'https://example.test/survey',
         },
       },
-      { type: 'FOOTER', order: 11, props: {} },
+      // Engagement placeholder QR — resolves to a real, scannable static offer page
+      // (apps/web/app/offer/[code]/page.tsx), not a dead link. `path` is authored
+      // here independently of COUPON's `code` above (not auto-derived) — kept in
+      // sync by hand, an accepted tradeoff for a demo-scale single template.
+      {
+        type: 'QR_CODE',
+        order: 11,
+        props: {
+          path: '/offer/RETAIL10',
+          caption: 'Scan for an exclusive offer',
+        },
+      },
+      { type: 'FOOTER', order: 12, props: {} },
     ],
   };
   await prisma.template.upsert({

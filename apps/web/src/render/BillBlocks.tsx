@@ -1,3 +1,4 @@
+import QRCode from 'qrcode-svg';
 import { RenderedBlock } from './template-renderer';
 import { formatMoney } from './money-format';
 import { TaxInvoiceCard } from './TaxInvoiceCard';
@@ -327,6 +328,27 @@ function BillBlock({ block, skin }: { block: RenderedBlock; skin: string }) {
           {/* Merchant-authored template copy — plain JSX children only, never
               dangerouslySetInnerHTML. */}
           <p className="bill-survey-prompt">{block.prompt}</p>
+        </div>
+      );
+    }
+
+    case 'QR_CODE': {
+      // RETAIL only (§3 note in KNOWN_BLOCK_TYPES) — guarded here too, not just by
+      // which template happens to include this block, in case a future template
+      // author adds it elsewhere without updating this guard.
+      if (skin !== 'retail' || !isPresent(block.path)) return null;
+      // path is template-authored (seed.ts), PUBLIC_BILL_BASE_URL is an ops-set env
+      // var — never merchant/customer input, so this is safe to combine directly.
+      const targetUrl = `${process.env.PUBLIC_BILL_BASE_URL ?? ''}${block.path}`;
+      const svg = new QRCode({ content: targetUrl, padding: 0, width: 96, height: 96, ecl: 'M' }).svg();
+      // <img src> is an opaque image reference — the browser never parses this as
+      // DOM/script, unlike dangerouslySetInnerHTML. No merchant/customer input ever
+      // reaches this string (see above), so this is safe even before that property.
+      const dataUri = `data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}`;
+      return (
+        <div className="bill-qr-code">
+          <img src={dataUri} alt="QR code for exclusive offer" width={96} height={96} />
+          {isPresent(block.caption) && <p className="bill-qr-code-caption">{block.caption}</p>}
         </div>
       );
     }

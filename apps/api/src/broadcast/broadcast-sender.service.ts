@@ -34,7 +34,7 @@ export class BroadcastSenderService implements BroadcastSender {
           from: 'billing@jbill.in',
           to: input.recipient,
           subject: 'Your bill',
-          text: 'Your bill is ready.',
+          text: `Your bill is ready: ${input.billUrl}`,
         });
       } catch (err) {
         // Classify from the error code, never surface the vendor's raw message/`rejected`
@@ -57,7 +57,10 @@ export class BroadcastSenderService implements BroadcastSender {
     }
 
     // SMS: log-only stub, no external call — the log line must say so, not "sent".
-    this.logger.log(`Broadcast logged (SMS stub, no external send) — recipient=${maskMobile(input.recipient)}`);
+    // billUrl appears unmasked (not PII); recipient stays masked.
+    this.logger.log(
+      `Broadcast logged (SMS stub, no external send) — recipient=${maskMobile(input.recipient)} url=${input.billUrl}`,
+    );
     return { sent: true };
   }
 }
