@@ -912,4 +912,18 @@ body {
   .btn-share {
     display: none;
   }
+
+  /* V-6: TAX_COMPLIANT's items table (TaxInvoiceCard.tsx) can run to many pages —
+     repeat the header row on every page, never split a row across a page break, and
+     never strand the header alone at the bottom of a page with no rows under it. */
+  .tax-invoice-table thead {
+    display: table-header-group;
+    break-after: avoid;
+    page-break-after: avoid;
+  }
+
+  .tax-invoice-table tbody tr {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
 }
