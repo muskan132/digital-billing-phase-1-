@@ -28,7 +28,8 @@ model Merchant {
   defaultTemplateId String?
   defaultTemplate   Template? @relation("MerchantDefault", fields: [defaultTemplateId], references: [id])
   gstin          String?                              // v2: merchant GSTIN, required for TAX_INVOICE (BR-4). 15 chars; chars 1-2 = state code
-  state          String?                              // v2: 2-digit GST state code, e.g. "27". MUST equal gstin[0:2]. Compared to placeOfSupply (D-25)
+  state          String?                              // display-name state field for the receipt address block
+  gstStateCode   String?                              // v2: 2-digit GST state code, e.g. "27". Compared to placeOfSupply (D-25)
   apiKeys        MerchantApiKey[]                     // v2 (D-19)
   createdAt      DateTime @default(now())
 }
@@ -136,6 +137,7 @@ model Bill {                                           // billing document rende
   totalPaise     BigInt
   currency       String   @default("INR")
   snapshot       Json                                  // resolved values the renderer fills into the template — WHITELISTED, see D-17 / D-28
+  layoutSnapshot Json?                                 // TEMPLATE_SYSTEM_v2 §7: frozen render spec (blocks, skeleton, templateId/templateVersion as provenance only), copied from the resolved template at bill-creation time by both P-1 and P-2. Read exclusively by the renderer — never bill.template.layoutSchema via a live join
   artifactVer    Int      @default(1)                  // bump on re-render
   // --- v2 TAX_INVOICE fields. All null on a RECEIPT (BR-23: GST validation never applies to receipts) ---
   invoiceNumber  String?                               // CALLER-SUPPLIED, required for TAX_INVOICE (D-20). The core generates no sequence
