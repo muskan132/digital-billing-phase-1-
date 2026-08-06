@@ -58,17 +58,24 @@ model User {                                          // v1: seeded, NO auth
   createdAt  DateTime @default(now())
 }
 
-model Template {                                      // predefined; 1-2 seeded rows
+model Template {                                      // v1: predefined, 1-2 seeded rows. v3: library presets + merchant-owned forks (D-32)
   id           String   @id @default(cuid())
-  merchantId   String?                                // NULL = shared library
+  merchantId   String?                                // NULL = shared library preset
   merchant     Merchant? @relation(fields: [merchantId], references: [id])
   name         String
   billType     BillType
-  layoutSchema Json                                   // ORDERED block array (see DECISIONS_v1)
-  version      Int      @default(1)
+  layoutSchema Json                                   // v3: the layoutSchema v2 ENVELOPE (see below). v1 rows were a bare ordered block array; T-5 migrates them once (D-29)
+  version      Int      @default(1)                   // v3: parent.version + 1 on every fork
+  parentTemplateId String?                            // v3: fork-on-write lineage. NULL = root of a lineage (D-32)
+  parentTemplate   Template?  @relation("TemplateHistory", fields: [parentTemplateId], references: [id])
+  versions         Template[] @relation("TemplateHistory")
+  isHead       Boolean  @default(true)                // v3: exactly one live row per lineage; the parent is flipped false INSIDE the fork transaction (D-32)
+  archivedAt   DateTime?                              // v3: soft delete only — a hard delete is impossible, Bill.templateId is a required FK (D-33)
   bills        Bill[]
   defaultOf    Merchant[] @relation("MerchantDefault")
   createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt                    // v3: builder list ordering. Backfill existing rows to createdAt in S-8
+  @@index([merchantId, isHead, archivedAt])           // v3: the builder's "my templates" query
 }
 
 model Order {                                         // v1: payment facts from the callback. v2: "a sale", from EITHER path (D-18)
@@ -138,6 +145,7 @@ model Bill {                                           // billing document rende
   currency       String   @default("INR")
   snapshot       Json                                  // resolved values the renderer fills into the template — WHITELISTED, see D-17 / D-28
   layoutSnapshot Json?                                 // TEMPLATE_SYSTEM_v2 §7: frozen render spec (blocks, skeleton, templateId/templateVersion as provenance only), copied from the resolved template at bill-creation time by both P-1 and P-2. Read exclusively by the renderer — never bill.template.layoutSchema via a live join
+                                                       // v3: NEVER migrated. A snapshot written before the v2 shape stays v1-shaped forever and is normalized AT READ (D-29) — migrating it in place would be a write to an already-issued document
   artifactVer    Int      @default(1)                  // bump on re-render
   // --- v2 TAX_INVOICE fields. All null on a RECEIPT (BR-23: GST validation never applies to receipts) ---
   invoiceNumber  String?                               // CALLER-SUPPLIED, required for TAX_INVOICE (D-20). The core generates no sequence
@@ -184,3 +192,49 @@ model Broadcast {                                       // the queue itself (NO 
 - **v2 money:** every amount stays `BigInt` paise; every tax rate stays an integer in basis points (`Int`). No `Float`, no `Decimal`, no string math anywhere in the calculation path. Computed line values are persisted (`OrderItem`), never recomputed at render.
 - **v2 credentials:** `MerchantApiKey.keyHash` is a SHA-256 digest of a high-entropy random key (not a password KDF — the input has full entropy, so a slow KDF buys nothing). Lookup is by `keyPrefix`, comparison is constant-time. The plaintext key exists exactly once, at creation.
 - `Bill` is added because step 2 persists "the order **and a bill**" and step 4 renders "the bill". Order = payment; Bill = document. (Flagged in GAPS — the entity list named Orders only.)
+
+---
+
+## `Template.layoutSchema` — v2 envelope (v3 / builder)
+
+Canonical definition and rationale: `TEMPLATE_SYSTEM_v2.md` §2. Restated here only because this file is the schema source of truth and the column's *shape* is part of the schema.
+
+```json
+{
+  "schemaVersion": 2,
+  "skeleton": "RETAIL",
+  "theme": { "accentHex": "#df9f3a", "density": "comfortable" },
+  "blocks": [
+    {
+      "id": "blk_h7x2",
+      "type": "ITEMS",
+      "order": 4,
+      "visible": true,
+      "width": "full",
+      "props": {
+        "heading": "Items",
+        "columns": [
+          { "field": "name",           "label": "ITEM",   "visible": true,  "align": "left"   },
+          { "field": "quantity",       "label": "QTY",    "visible": true,  "align": "center" },
+          { "field": "unitPricePaise", "label": "RATE",   "visible": true,  "align": "right"  },
+          { "field": "amountPaise",    "label": "AMOUNT", "visible": true,  "align": "right"  },
+          { "field": "hsn",            "label": "HSN",    "visible": false, "align": "left"   }
+        ],
+        "secondaryFields": ["hsn"]
+      }
+    }
+  ]
+}
+```
+
+- **`skeleton` and `theme` stay inside the JSON — they are deliberately NOT columns.** No query filters on them, and keeping them in the document means the whole render spec is one thing to copy into `Bill.layoutSnapshot`.
+- **`blocks[].id`** is stable per-block identity, generated once and never reused. Array position is not identity — a reorder must not look like delete-then-create (drag handles, undo/redo, and per-block validation issues all key on it).
+- **`width`** is `"full" | "half" | "third"` — a fraction, never pixels (§6). No `x`/`y` exists anywhere in this document by design.
+- **`columns[].field` is system-owned and immutable**; `label`/`visible`/`align`/order are merchant-owned. No write path may ever set `field` from merchant input (D-2 of the template system; enforced in U-2).
+- **`schemaVersion` absent ⇒ version 1** (the bare `[{type,order,props}]` array). `Template` rows are migrated to v2 once (T-5). `Bill.layoutSnapshot` rows are **never** migrated and are normalized at read (D-29).
+- Validation of this document is one shared pure function (`validateLayoutSchema`), used by both the builder and the write boundary (D-30, D-31).
+
+**v3 notes**
+- `Template` gains no `isDefault` column. `Merchant.defaultTemplateId` remains the single source of truth for "the default", and the fork transaction repoints it (D-39, D-32).
+- Fork-on-write means `Template` rows accumulate. `isHead` + `archivedAt` are what keep the builder's list finite; `parentTemplateId` is history, not a query key.
+- Nothing in Phase 3 touches a money column, a `_pii` column, `Bill.snapshot`, or the D-28 whitelist. Preview data is synthetic (D-35), so the builder surface holds no customer data at all.
