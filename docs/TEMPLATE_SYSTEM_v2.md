@@ -112,10 +112,13 @@ Twenty-two types cover all four templates. Marked ● = used, ○ = optional.
 | 20 | `SURVEY` | Rating / feedback prompt | ● | ● | ● | ● | `prompt`, `type`, `url` |
 | 21 | `MARKETING` | Promo banner | ● | ● | ● | ○ | `headline`, `body`, `imageUrl`, `url` |
 | 22 | `CUSTOM_CONTENT` | Free merchant text | ○ | ○ | ○ | ○ | `text` (output-encoded, never raw HTML) |
+| 23 | `QR_CODE` | Scannable engagement QR linking to a static offer page | — | ● | — | — | `path`, `caption` |
 
 **Blocks 1–9 are the universal spine.** Every bill has them in that order. Everything else slots around it. This is why one renderer serves four industries.
 
 **Security note on 19–22:** every merchant-supplied string in these props is untrusted. Render via plain JSX children only — never `dangerouslySetInnerHTML`. `CUSTOM_CONTENT` in particular must never accept HTML.
+
+**Row 23 added post-doc (T-3).** `QR_CODE` is not part of the original 22-block catalogue this table described — it was added directly in `template-renderer.ts`/`BillBlocks.tsx` for the RETAIL template (seed.ts) ahead of this catalogue being updated. RETAIL only today; rendering is additionally gated on `skeleton === 'RETAIL'` in `BillBlocks.tsx`, not just template inclusion.
 
 ---
 

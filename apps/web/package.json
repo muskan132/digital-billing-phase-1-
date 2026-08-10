@@ -9,6 +9,7 @@
     "test": "jest"
   },
   "dependencies": {
+    "@digital-billing/block-manifest": "workspace:*",
     "lucide-react": "^1.24.0",
     "next": "^15.1.4",
     "qrcode-svg": "^1.1.0",

@@ -1,36 +1,11 @@
 import { formatCallbackDateTime } from './date-format';
+import { BLOCK_TYPES as KNOWN_BLOCK_TYPES, BlockType } from '@digital-billing/block-manifest';
 
-// Block-type enum per D-10 (docs/DECISIONS_v1.md) — the only valid layoutSchema block
-// types for v1. Expected to grow further (MARKETING per the FSD).
-// SAVINGS/LOYALTY/COUPON/SURVEY/AMOUNT_PAYABLE added for the RETAIL template
-// (docs/TEMPLATE_SYSTEM_v2.md §3 catalogue #10/#11/#19/#20/#8). AMOUNT_PAYABLE is
-// distinct from TOTAL: §3 documents TOTAL as the pre-tax total and AMOUNT_PAYABLE as
-// the post-tax hero total — §5's fixed document order (Items -> TOTAL -> tax ladder ->
-// AMOUNT_PAYABLE) only makes sense if they're different figures.
-// BILL_META added for RESTAURANT/QSR (§3 catalogue #3, §4.1) — bill no. + date only,
-// no table number/server name (staff-internal, not customer-useful per explicit
-// feedback).
-// QR_CODE added for RETAIL — unlike every type above, this one is NOT in
-// TEMPLATE_SYSTEM_v2.md §3's 22-block catalogue at all, so it's genuinely new, not a
-// pre-documented gap being filled. Engagement placeholder (scan for an offer), not a
-// link back to the bill itself. RETAIL only for now.
-const KNOWN_BLOCK_TYPES = [
-  'HEADER',
-  'MERCHANT_INFO',
-  'BILL_META',
-  'ITEMS',
-  'PAYMENT_DETAILS',
-  'TAX_SUMMARY',
-  'TOTAL',
-  'AMOUNT_PAYABLE',
-  'SAVINGS',
-  'LOYALTY',
-  'COUPON',
-  'SURVEY',
-  'QR_CODE',
-  'FOOTER',
-] as const;
-type BlockType = (typeof KNOWN_BLOCK_TYPES)[number];
+// Block-type enum: sourced from the block manifest (D-30) — the single shared
+// declaration of every valid layoutSchema block type, imported here rather than
+// declared locally, per D-30's rejection of duplication-plus-a-drift-test. See
+// packages/block-manifest/src/index.ts for the full per-type prop/renderer
+// declaration and the rationale for exactly this 14-type set.
 
 export interface LayoutBlock {
   type: string;

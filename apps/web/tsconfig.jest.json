@@ -4,6 +4,7 @@
     "module": "commonjs",
     "moduleResolution": "node",
     "noEmit": false,
-    "isolatedModules": false
+    "isolatedModules": false,
+    "jsx": "react-jsx"
   }
 }
