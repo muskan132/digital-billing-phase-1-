@@ -10,6 +10,8 @@
     "sign-fixture": "ts-node scripts/sign-fixture.ts",
     "demo": "ts-node scripts/demo.ts",
     "backfill:layout-snapshot": "ts-node scripts/backfill-layout-snapshot.ts",
+    "migrate:layout-schema-v2": "ts-node scripts/migrate-layout-schema-v2.ts",
+    "verify": "ts-node scripts/verify-v3-task.ts",
     "test": "jest"
   },
   "dependencies": {

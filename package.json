@@ -1,5 +1,8 @@
 {
   "name": "digital-billing",
   "version": "0.0.1",
-  "private": true
+  "private": true,
+  "scripts": {
+    "verify": "pnpm --filter @digital-billing/api verify"
+  }
 }
