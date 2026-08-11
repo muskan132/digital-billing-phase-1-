@@ -1,4 +1,5 @@
 export * from './normalize-layout';
+export * from './validate-layout';
 
 // The block manifest (D-30, docs/TEMPLATE_SYSTEM_v2.md §1) — the single
 // declaration of what each block TYPE is: its prop shape, defaults, which
