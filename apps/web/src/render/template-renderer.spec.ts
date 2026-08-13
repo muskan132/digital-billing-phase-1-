@@ -1,4 +1,7 @@
+import * as React from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { renderTemplate, LayoutBlock, BillSnapshot, BillSnapshotLineItem, BillMerchant, ColumnConfig } from './template-renderer';
+import { BillBlocks } from './BillBlocks';
 
 // Mirrors apps/api/prisma/seed.ts's RECEIPT_LAYOUT_SCHEMA (shared by both skeletons).
 const SEEDED_LAYOUT_SCHEMA: LayoutBlock[] = [
@@ -359,6 +362,26 @@ describe('renderTemplate', () => {
     const block = result[0];
     if (block.type !== 'ITEMS' || block.kind !== 'columns') throw new Error('expected columns ITEMS');
     expect(block.rows[0].fields.name).toBe(maliciousName);
+  });
+
+  // U-2: column.label becomes merchant-editable for the first time via the builder's
+  // COMPONENTS tab. Every other XSS test in this file targets item.name; this is the
+  // first to target column.label specifically — closing that gap, not introducing new
+  // renderer behavior (BillBlocks.tsx:164's `{col.label}` was already plain JSX
+  // interpolation before U-2 existed).
+  it('U-2: a <script> in a column label renders as escaped, inert text in the final HTML — full renderToStaticMarkup proof, not just data passthrough', () => {
+    const maliciousLabel = '<script>alert(1)</script>';
+    const columns: ColumnConfig[] = [{ ...TAX_COMPLIANT_ITEMS_COLUMNS[0], label: maliciousLabel }, ...TAX_COMPLIANT_ITEMS_COLUMNS.slice(1)];
+
+    const rendered = renderTemplate(
+      [{ type: 'ITEMS', order: 1, props: { columns, secondaryFields: [] } }],
+      TAX_INVOICE_SNAPSHOT,
+      SAMPLE_MERCHANT,
+    );
+    const html = renderToStaticMarkup(React.createElement(BillBlocks, { blocks: rendered, skeleton: 'TAX_COMPLIANT' }));
+
+    expect(html).not.toContain('<script>alert(1)</script>'); // never present unescaped
+    expect(html).toContain('&lt;script&gt;alert(1)&lt;/script&gt;'); // present ONLY as escaped, inert text
   });
 
   // ---- BUG 2 fix: TAX_COMPLIANT now reuses RETAIL's exact aggregate/pre_tax logic ----
