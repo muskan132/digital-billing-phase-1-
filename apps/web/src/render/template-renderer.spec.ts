@@ -188,12 +188,14 @@ describe('renderTemplate', () => {
 
     expect(result).toEqual([
       {
+        width: 'full',
         type: 'HEADER',
         merchantName: 'Demo Merchant',
         receiptNumber: '7700206148341-001',
         formattedDateTime: '10 Sep 2025, 12:34 PM',
       },
       {
+        width: 'full',
         type: 'MERCHANT_INFO',
         kind: 'receipt',
         addressLine1: '221, Linking Road',
@@ -203,16 +205,17 @@ describe('renderTemplate', () => {
         pincode: '400050',
         gstin: '27ABCDE1234F1Z5',
       },
-      { type: 'ITEMS', kind: 'single', totalPaise: '100', currency: 'INR' },
-      { type: 'TOTAL', kind: 'simple', totalPaise: '100', currency: 'INR' },
+      { width: 'full', type: 'ITEMS', kind: 'single', totalPaise: '100', currency: 'INR' },
+      { width: 'full', type: 'TOTAL', kind: 'simple', totalPaise: '100', currency: 'INR' },
       {
+        width: 'full',
         type: 'PAYMENT_DETAILS',
         paymentMode: 'Card',
         cardNetwork: 'VISA',
         paymentInstId: '4XXX XXXX XXXX 1111',
         merchantTxnNo: 'UAT1280835036',
       },
-      { type: 'FOOTER', supportEmail: 'support@demo-merchant.test', supportPhone: '+91 22 4000 1234' },
+      { width: 'full', type: 'FOOTER', supportEmail: 'support@demo-merchant.test', supportPhone: '+91 22 4000 1234' },
     ]);
   });
 
@@ -241,7 +244,7 @@ describe('renderTemplate', () => {
   it('renders blank/undefined values for non-money fields missing from snapshot/merchant, without throwing', () => {
     const result = renderTemplate([{ type: 'HEADER', order: 1, props: {} }], {});
 
-    expect(result).toEqual([{ type: 'HEADER', merchantName: undefined, receiptNumber: undefined, formattedDateTime: null }]);
+    expect(result).toEqual([{ width: 'full', type: 'HEADER', merchantName: undefined, receiptNumber: undefined, formattedDateTime: null }]);
   });
 
   it('renders an explicit "Amount unavailable" marker for TOTAL/ITEMS when amountPaise/currency are missing, without throwing', () => {
@@ -254,8 +257,8 @@ describe('renderTemplate', () => {
     );
 
     expect(result).toEqual([
-      { type: 'ITEMS', kind: 'single', totalPaise: 'Amount unavailable', currency: 'Amount unavailable' },
-      { type: 'TOTAL', kind: 'simple', totalPaise: 'Amount unavailable', currency: 'Amount unavailable' },
+      { width: 'full', type: 'ITEMS', kind: 'single', totalPaise: 'Amount unavailable', currency: 'Amount unavailable' },
+      { width: 'full', type: 'TOTAL', kind: 'simple', totalPaise: 'Amount unavailable', currency: 'Amount unavailable' },
     ]);
   });
 
@@ -266,7 +269,7 @@ describe('renderTemplate', () => {
     );
 
     expect(result).toEqual([
-      { type: 'PAYMENT_DETAILS', paymentMode: 'UPI', cardNetwork: null, paymentInstId: null, merchantTxnNo: 'mtxn_1' },
+      { width: 'full', type: 'PAYMENT_DETAILS', paymentMode: 'UPI', cardNetwork: null, paymentInstId: null, merchantTxnNo: 'mtxn_1' },
     ]);
   });
 
@@ -276,10 +279,54 @@ describe('renderTemplate', () => {
     expect(() => renderTemplate(invalidSchema, SAMPLE_SNAPSHOT, SAMPLE_MERCHANT)).toThrow(/Unknown block type/);
   });
 
+  // ---- U-3: visible/width — the whole point of this change ----
+
+  it('U-3: a block with visible:false is filtered out entirely, not rendered as an empty placeholder', () => {
+    const result = renderTemplate(
+      [
+        { type: 'HEADER', order: 1, props: {}, visible: true },
+        { type: 'FOOTER', order: 2, props: {}, visible: false },
+      ],
+      SAMPLE_SNAPSHOT,
+      SAMPLE_MERCHANT,
+    );
+
+    expect(result.map((b) => b.type)).toEqual(['HEADER']);
+  });
+
+  it('U-3: an ABSENT visible key renders exactly as before — undefined is never treated as false', () => {
+    // No `visible` key at all — the shape every historical Bill.layoutSnapshot and
+    // every pre-T-4 v1 array actually has. Must NOT be filtered out.
+    const result = renderTemplate([{ type: 'HEADER', order: 1, props: {} }], SAMPLE_SNAPSHOT, SAMPLE_MERCHANT);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].type).toBe('HEADER');
+  });
+
+  it('U-3: an explicit width is carried through onto the rendered block', () => {
+    const result = renderTemplate(
+      [
+        { type: 'HEADER', order: 1, props: {}, width: 'half' },
+        { type: 'FOOTER', order: 2, props: {}, width: 'third' },
+      ],
+      SAMPLE_SNAPSHOT,
+      SAMPLE_MERCHANT,
+    );
+
+    expect(result[0].width).toBe('half');
+    expect(result[1].width).toBe('third');
+  });
+
+  it('U-3: an ABSENT width key defaults to "full" — historical data with no width key renders exactly as before (full-width, stacked)', () => {
+    const result = renderTemplate([{ type: 'HEADER', order: 1, props: {} }], SAMPLE_SNAPSHOT, SAMPLE_MERCHANT);
+
+    expect(result[0].width).toBe('full');
+  });
+
   it('renders TAX_SUMMARY with no rows when the snapshot has no items (e.g. a RECEIPT snapshot), without throwing', () => {
     const result = renderTemplate([{ type: 'TAX_SUMMARY', order: 1, props: {} }], SAMPLE_SNAPSHOT, SAMPLE_MERCHANT);
 
-    expect(result).toEqual([{ type: 'TAX_SUMMARY', kind: 'legacy_matrix', isIntraState: true, rows: [], currency: 'INR' }]);
+    expect(result).toEqual([{ width: 'full', type: 'TAX_SUMMARY', kind: 'legacy_matrix', isIntraState: true, rows: [], currency: 'INR' }]);
   });
 
   it('renders the seeded TAX_COMPLIANT layoutSchema (T-2) end-to-end without throwing', () => {
@@ -314,6 +361,7 @@ describe('renderTemplate', () => {
 
     expect(result).toEqual([
       {
+        width: 'full',
         type: 'MERCHANT_INFO',
         kind: 'tax_invoice',
         merchantName: 'Demo Merchant', // from TAX_INVOICE_SNAPSHOT.merchantName, not the live merchant's "A DIFFERENT CURRENT NAME"
@@ -401,7 +449,7 @@ describe('renderTemplate', () => {
   it('BUG 2 fix: TAX_COMPLIANT\'s TOTAL now shows the pre-tax figure, matching RETAIL', () => {
     const result = renderTemplate([{ type: 'TOTAL', order: 1, props: { basis: 'pre_tax' } }], TAX_INVOICE_SNAPSHOT, SAMPLE_MERCHANT);
 
-    expect(result).toEqual([{ type: 'TOTAL', kind: 'pre_tax', totalPaise: '25000', currency: 'INR' }]);
+    expect(result).toEqual([{ width: 'full', type: 'TOTAL', kind: 'pre_tax', totalPaise: '25000', currency: 'INR' }]);
   });
 
   // ---- V-5: itemized ITEMS ----
@@ -411,6 +459,7 @@ describe('renderTemplate', () => {
 
     expect(result).toEqual([
       {
+        width: 'full',
         type: 'ITEMS',
         kind: 'itemized',
         currency: 'INR',
@@ -454,6 +503,7 @@ describe('renderTemplate', () => {
 
     expect(result).toEqual([
       expect.objectContaining({
+        width: 'full',
         type: 'ITEMS',
         kind: 'itemized',
         items: [expect.objectContaining({ discountPaise: '175' })],
@@ -464,7 +514,7 @@ describe('renderTemplate', () => {
   it('V-5: falls back to the single-row ITEMS style when snapshot.items is absent (RECEIPT bills unaffected)', () => {
     const result = renderTemplate([{ type: 'ITEMS', order: 1, props: {} }], SAMPLE_SNAPSHOT, SAMPLE_MERCHANT);
 
-    expect(result).toEqual([{ type: 'ITEMS', kind: 'single', totalPaise: '100', currency: 'INR' }]);
+    expect(result).toEqual([{ width: 'full', type: 'ITEMS', kind: 'single', totalPaise: '100', currency: 'INR' }]);
   });
 
   // ---- V-5: TAX_SUMMARY grouped by rate ----
@@ -474,6 +524,7 @@ describe('renderTemplate', () => {
 
     expect(result).toEqual([
       {
+        width: 'full',
         type: 'TAX_SUMMARY',
         kind: 'legacy_matrix',
         isIntraState: true,
@@ -495,6 +546,7 @@ describe('renderTemplate', () => {
 
     expect(result).toEqual([
       {
+        width: 'full',
         type: 'TAX_SUMMARY',
         kind: 'legacy_matrix',
         isIntraState: false,
@@ -520,6 +572,7 @@ describe('renderTemplate', () => {
 
     expect(result).toEqual([
       {
+        width: 'full',
         type: 'TAX_SUMMARY',
         kind: 'legacy_matrix',
         isIntraState: true,
@@ -560,6 +613,7 @@ describe('renderTemplate', () => {
 
     expect(result).toEqual([
       expect.objectContaining({
+        width: 'full',
         type: 'ITEMS',
         kind: 'itemized',
         items: [expect.objectContaining({ name: maliciousName })],
@@ -593,6 +647,7 @@ describe('renderTemplate', () => {
 
     expect(result).toEqual([
       {
+        width: 'full',
         type: 'ITEMS',
         kind: 'columns',
         columns: RETAIL_ITEMS_COLUMNS,
@@ -645,20 +700,20 @@ describe('renderTemplate', () => {
   it('RETAIL: TOTAL with props.basis "pre_tax" shows subtotal - discount, not the grand total', () => {
     const result = renderTemplate([{ type: 'TOTAL', order: 1, props: { basis: 'pre_tax' } }], TAX_INVOICE_SNAPSHOT, SAMPLE_MERCHANT);
 
-    expect(result).toEqual([{ type: 'TOTAL', kind: 'pre_tax', totalPaise: '25000', currency: 'INR' }]); // 25000 - 0
+    expect(result).toEqual([{ width: 'full', type: 'TOTAL', kind: 'pre_tax', totalPaise: '25000', currency: 'INR' }]); // 25000 - 0
   });
 
   it('RETAIL: TOTAL without props.basis keeps the existing grand-total behavior (other skeletons unaffected)', () => {
     const result = renderTemplate([{ type: 'TOTAL', order: 1, props: {} }], TAX_INVOICE_SNAPSHOT, SAMPLE_MERCHANT);
 
-    expect(result).toEqual([{ type: 'TOTAL', kind: 'simple', totalPaise: 'Amount unavailable', currency: 'INR' }]);
+    expect(result).toEqual([{ width: 'full', type: 'TOTAL', kind: 'simple', totalPaise: 'Amount unavailable', currency: 'INR' }]);
   });
 
   it('RETAIL: AMOUNT_PAYABLE shows the grand total (distinct from pre-tax TOTAL)', () => {
     const snapshot: BillSnapshot = { ...TAX_INVOICE_SNAPSHOT, amountPaise: '26900' };
     const result = renderTemplate([{ type: 'AMOUNT_PAYABLE', order: 1, props: {} }], snapshot, SAMPLE_MERCHANT);
 
-    expect(result).toEqual([{ type: 'AMOUNT_PAYABLE', totalPaise: '26900', currency: 'INR' }]);
+    expect(result).toEqual([{ width: 'full', type: 'AMOUNT_PAYABLE', totalPaise: '26900', currency: 'INR' }]);
   });
 
   // ---- RETAIL: TAX_SUMMARY aggregate shape (§5, final spec) ----
@@ -680,6 +735,7 @@ describe('renderTemplate', () => {
 
     expect(result).toEqual([
       {
+        width: 'full',
         type: 'TAX_SUMMARY',
         kind: 'aggregate',
         isIntraState: true,
@@ -707,6 +763,7 @@ describe('renderTemplate', () => {
 
     expect(result).toEqual([
       {
+        width: 'full',
         type: 'TAX_SUMMARY',
         kind: 'aggregate',
         isIntraState: false,
@@ -727,6 +784,7 @@ describe('renderTemplate', () => {
 
     expect(result).toEqual([
       {
+        width: 'full',
         type: 'TAX_SUMMARY',
         kind: 'aggregate',
         isIntraState: true,
@@ -749,6 +807,7 @@ describe('renderTemplate', () => {
 
     expect(result).toEqual([
       {
+        width: 'full',
         type: 'TAX_SUMMARY',
         kind: 'aggregate',
         isIntraState: false,
@@ -784,13 +843,13 @@ describe('renderTemplate', () => {
   it('RETAIL: SAVINGS has no data source yet — savingsPaise is always undefined', () => {
     const result = renderTemplate([{ type: 'SAVINGS', order: 1, props: {} }], TAX_INVOICE_SNAPSHOT, SAMPLE_MERCHANT);
 
-    expect(result).toEqual([{ type: 'SAVINGS', savingsPaise: undefined, currency: 'INR' }]);
+    expect(result).toEqual([{ width: 'full', type: 'SAVINGS', savingsPaise: undefined, currency: 'INR' }]);
   });
 
   it('RETAIL: LOYALTY has no data source yet — pointsEarned/balance are always undefined', () => {
     const result = renderTemplate([{ type: 'LOYALTY', order: 1, props: {} }], TAX_INVOICE_SNAPSHOT, SAMPLE_MERCHANT);
 
-    expect(result).toEqual([{ type: 'LOYALTY', pointsEarned: undefined, balance: undefined }]);
+    expect(result).toEqual([{ width: 'full', type: 'LOYALTY', pointsEarned: undefined, balance: undefined }]);
   });
 
   // ---- RETAIL: COUPON/SURVEY — template-authored static copy, CAN render real
@@ -805,7 +864,7 @@ describe('renderTemplate', () => {
     const result = renderTemplate([block], TAX_INVOICE_SNAPSHOT, SAMPLE_MERCHANT);
 
     expect(result).toEqual([
-      { type: 'COUPON', headline: '10% off your next visit', code: 'RETAIL10', validity: 'Valid till 31 Aug', ctaLabel: 'Redeem' },
+      { width: 'full', type: 'COUPON', headline: '10% off your next visit', code: 'RETAIL10', validity: 'Valid till 31 Aug', ctaLabel: 'Redeem' },
     ]);
   });
 
@@ -813,7 +872,7 @@ describe('renderTemplate', () => {
     const block: LayoutBlock = { type: 'SURVEY', order: 1, props: { prompt: 'How was your visit?', type: 'rating', url: 'https://example.test/survey' } };
     const result = renderTemplate([block], TAX_INVOICE_SNAPSHOT, SAMPLE_MERCHANT);
 
-    expect(result).toEqual([{ type: 'SURVEY', prompt: 'How was your visit?', surveyType: 'rating', url: 'https://example.test/survey' }]);
+    expect(result).toEqual([{ width: 'full', type: 'SURVEY', prompt: 'How was your visit?', surveyType: 'rating', url: 'https://example.test/survey' }]);
   });
 
   // ---- RETAIL: item name safety in the columns-driven path ----
@@ -856,14 +915,14 @@ describe('renderTemplate', () => {
   it('RESTAURANT: BILL_META renders billNumber from snapshot.invoiceNumber; date is always undefined (no data source yet)', () => {
     const result = renderTemplate([{ type: 'BILL_META', order: 1, props: {} }], TAX_INVOICE_SNAPSHOT, SAMPLE_MERCHANT);
 
-    expect(result).toEqual([{ type: 'BILL_META', billNumber: 'INV-2026-0001', date: undefined }]);
+    expect(result).toEqual([{ width: 'full', type: 'BILL_META', billNumber: 'INV-2026-0001', date: undefined }]);
   });
 
   it('RESTAURANT: BILL_META with no invoiceNumber on the snapshot still doesn\'t throw', () => {
     const snapshot: BillSnapshot = { ...TAX_INVOICE_SNAPSHOT, invoiceNumber: undefined };
     const result = renderTemplate([{ type: 'BILL_META', order: 1, props: {} }], snapshot, SAMPLE_MERCHANT);
 
-    expect(result).toEqual([{ type: 'BILL_META', billNumber: undefined, date: undefined }]);
+    expect(result).toEqual([{ width: 'full', type: 'BILL_META', billNumber: undefined, date: undefined }]);
   });
 
   it('RESTAURANT: ITEMS config has no hsn field anywhere (not a column, not a secondaryField) and quantity is present for the name-fold', () => {
@@ -889,6 +948,7 @@ describe('renderTemplate', () => {
 
     expect(result).toEqual([
       {
+        width: 'full',
         type: 'TAX_SUMMARY',
         kind: 'aggregate',
         isIntraState: true,

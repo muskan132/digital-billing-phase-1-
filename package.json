@@ -3,6 +3,8 @@
   "version": "0.0.1",
   "private": true,
   "scripts": {
-    "verify": "pnpm --filter @digital-billing/api verify"
+    "verify": "pnpm --filter @digital-billing/api verify",
+    "dev:up": "powershell -ExecutionPolicy Bypass -File scripts/dev-up.ps1",
+    "dev:down": "powershell -ExecutionPolicy Bypass -File scripts/dev-down.ps1"
   }
 }

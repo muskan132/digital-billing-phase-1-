@@ -66,7 +66,12 @@ function fnv1a(str: string): number {
 // validate; T-6's validateLayoutSchema is where that gets rejected.
 // Full 32-bit hash space is kept (no truncation) to avoid manufacturing a
 // collision risk that fnv1a's own output didn't have.
-function generateBlockId(type: string, order: number): string {
+// U-3: exported so the builder's "add block from palette" action reuses this exact
+// scheme for brand-new blocks too, rather than a second id-generation mechanism —
+// still safe there for the same reason it's safe here: a new block gets a fresh
+// `order` (current max + 1), and two blocks only collide if they share BOTH type
+// and order, which is already an invalid document per T-6.
+export function generateBlockId(type: string, order: number): string {
   const hash = fnv1a(`${type}:${order}`);
   return `blk_${hash.toString(36).padStart(7, '0')}`;
 }

@@ -26,14 +26,52 @@ export function BillBlocks({ blocks, skeleton }: { blocks: RenderedBlock[]; skel
 
   return (
     <div className={`bill-card bill-card--${skin}`}>
-      {blocks.map((block, index) => (
-        <BillBlock key={index} block={block} skin={skin} />
-      ))}
+      {groupIntoRows(blocks).map((group, index) =>
+        Array.isArray(group) ? (
+          <div key={index} className="bill-block-row">
+            {group.map((block, i) => (
+              <div key={i} className={`bill-block-row-item bill-block-row-item--${block.width}`}>
+                <BillBlock block={block} skin={skin} />
+              </div>
+            ))}
+          </div>
+        ) : (
+          <BillBlock key={index} block={group} skin={skin} />
+        ),
+      )}
       {/* Single PAID badge, positioned per skin by CSS alone (top-right pill for
           minimalist, centred near the bottom for thermal) — not duplicated per block. */}
       <span className="bill-paid-badge">PAID</span>
     </div>
   );
+}
+
+// §6: adjacent blocks may be grouped into a row when their combined width fits
+// (half+half, third+third+third). Any run of consecutive non-'full' blocks becomes
+// one row — reflow to a stack at narrow widths is CSS-only (media query), not
+// computed here, so a run that doesn't sum to exactly 1 (e.g. a lone 'half') still
+// renders correctly, just not filling the row. 'full' blocks always stand alone,
+// never joining a row — that's what keeps every existing bill (100% full-width
+// blocks today) rendering in exactly the same one-block-per-row shape as before.
+function groupIntoRows(blocks: RenderedBlock[]): (RenderedBlock | RenderedBlock[])[] {
+  const groups: (RenderedBlock | RenderedBlock[])[] = [];
+  let currentRow: RenderedBlock[] = [];
+
+  for (const block of blocks) {
+    if (block.width === 'full') {
+      if (currentRow.length > 0) {
+        groups.push(currentRow);
+        currentRow = [];
+      }
+      groups.push(block);
+    } else {
+      currentRow.push(block);
+    }
+  }
+  if (currentRow.length > 0) {
+    groups.push(currentRow);
+  }
+  return groups;
 }
 
 function BillBlock({ block, skin }: { block: RenderedBlock; skin: string }) {

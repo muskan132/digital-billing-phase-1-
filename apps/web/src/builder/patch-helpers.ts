@@ -4,7 +4,7 @@
 // module, so no column-editing function is even CAPABLE of writing it. A
 // rename is structurally incapable of becoming a rebind (Tier-1: field is
 // what determines which real data value reaches the public bill page).
-import { LayoutSchemaV2 } from '@digital-billing/block-manifest';
+import { generateBlockId, LayoutBlockV2, LayoutSchemaV2 } from '@digital-billing/block-manifest';
 
 interface ColumnConfig {
   field: string;
@@ -75,4 +75,63 @@ export function moveColumn(doc: LayoutSchemaV2, blockId: string, index: number, 
       return next;
     }),
   );
+}
+
+// ---- U-3: block-level operations (BILL tab) ----
+
+export function addBlock(doc: LayoutSchemaV2, type: string, defaults: Record<string, unknown>): LayoutSchemaV2 {
+  const maxOrder = doc.blocks.reduce((max, b) => Math.max(max, b.order), 0);
+  const order = maxOrder + 1;
+  const newBlock: LayoutBlockV2 = {
+    id: generateBlockId(type, order),
+    type,
+    order,
+    props: { ...defaults },
+    visible: true,
+    width: 'full',
+  };
+  return { ...doc, blocks: [...doc.blocks, newBlock] };
+}
+
+export function removeBlock(doc: LayoutSchemaV2, blockId: string): LayoutSchemaV2 {
+  return { ...doc, blocks: doc.blocks.filter((b) => b.id !== blockId) };
+}
+
+export function setBlockVisible(doc: LayoutSchemaV2, blockId: string, visible: boolean): LayoutSchemaV2 {
+  return { ...doc, blocks: doc.blocks.map((b) => (b.id === blockId ? { ...b, visible } : b)) };
+}
+
+// No pixel value ever accepted here — width is one of exactly three fractions
+// (§6), same invariant as the manifest's own width type.
+export function setBlockWidth(doc: LayoutSchemaV2, blockId: string, width: LayoutBlockV2['width']): LayoutSchemaV2 {
+  return { ...doc, blocks: doc.blocks.map((b) => (b.id === blockId ? { ...b, width } : b)) };
+}
+
+// The SINGLE reorder primitive both drag (dnd-kit's onDragEnd gives an
+// old/new array index directly) and the move-up/move-down buttons (which
+// compute newPosition = currentPosition ± 1) call — both paths converge here,
+// so both write identical blocks[].order values for the same resulting
+// arrangement, per U-3's own verify line. Renumbers ALL blocks sequentially
+// from the new sorted order, not just the moved one, so `order` always stays
+// a clean 1..N sequence with no gaps or duplicates regardless of history.
+export function reorderBlockToPosition(doc: LayoutSchemaV2, blockId: string, newPosition: number): LayoutSchemaV2 {
+  const sorted = [...doc.blocks].sort((a, b) => a.order - b.order);
+  const fromIndex = sorted.findIndex((b) => b.id === blockId);
+  if (fromIndex === -1) {
+    return doc;
+  }
+  const clampedPosition = Math.max(0, Math.min(newPosition, sorted.length - 1));
+  const [moved] = sorted.splice(fromIndex, 1);
+  sorted.splice(clampedPosition, 0, moved);
+
+  return { ...doc, blocks: sorted.map((b, i) => ({ ...b, order: i + 1 })) };
+}
+
+export function moveBlock(doc: LayoutSchemaV2, blockId: string, direction: 'up' | 'down'): LayoutSchemaV2 {
+  const sorted = [...doc.blocks].sort((a, b) => a.order - b.order);
+  const index = sorted.findIndex((b) => b.id === blockId);
+  if (index === -1) {
+    return doc;
+  }
+  return reorderBlockToPosition(doc, blockId, direction === 'up' ? index - 1 : index + 1);
 }

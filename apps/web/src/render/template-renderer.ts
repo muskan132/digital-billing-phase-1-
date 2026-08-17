@@ -11,6 +11,12 @@ export interface LayoutBlock {
   type: string;
   order: number;
   props: Record<string, unknown>;
+  // Both optional (U-3): historical Bill.layoutSnapshot rows frozen before this field
+  // existed have neither key at all, not an explicit true/'full' — renderTemplate must
+  // treat an ABSENT value as "visible"/"full", never as false/undefined-is-falsy, or
+  // every already-issued bill's blocks would render as hidden the instant this ships.
+  visible?: boolean;
+  width?: 'full' | 'half' | 'third';
 }
 
 // Bill.snapshot as P-1 (apps/api/src/callbacks/callbacks.service.ts) actually writes it.
@@ -130,7 +136,14 @@ export interface BillMerchant {
   supportPhone?: string | null;
 }
 
-export type RenderedBlock =
+// U-3: `width` is attached via this intersection over a SEPARATELY named union
+// (RenderedBlockContent) — renderBlock returns the un-widthed content type below and
+// renderTemplate's single call site adds `width` via spread, so none of the 14 cases
+// below need to change for row-grouping, and (importantly) Omit<RenderedBlock,'width'>
+// was avoided here on purpose: Omit does not distribute cleanly over an intersected
+// union and would have collapsed the discriminated-union narrowing every consumer of
+// RenderedBlock (BillBlocks.tsx's switch) relies on.
+type RenderedBlockContent =
   | {
       type: 'HEADER';
       merchantName: string | undefined;
@@ -265,6 +278,8 @@ export type RenderedBlock =
       supportPhone: string | null | undefined;
     };
 
+export type RenderedBlock = { width: 'full' | 'half' | 'third' } & RenderedBlockContent;
+
 // A blank amount on a paid bill is a worse failure than a blank name/date field would
 // be — silently empty money reads as "nothing to pay" rather than "data problem" to a
 // customer. So unlike other fields, a missing money value gets an explicit visible
@@ -282,7 +297,7 @@ function renderMoneyFields(snapshot: BillSnapshot): { totalPaise: string; curren
   };
 }
 
-function renderBlock(block: LayoutBlock, snapshot: BillSnapshot, merchant: BillMerchant): RenderedBlock {
+function renderBlock(block: LayoutBlock, snapshot: BillSnapshot, merchant: BillMerchant): RenderedBlockContent {
   if (!isKnownBlockType(block.type)) {
     // D-10: any type outside the enum is invalid and must be rejected, not silently
     // skipped or passed through — this is a schema violation, not missing data.
@@ -513,5 +528,11 @@ export function renderTemplate(
   snapshot: BillSnapshot,
   merchant: BillMerchant = {},
 ): RenderedBlock[] {
-  return [...layoutSchema].sort((a, b) => a.order - b.order).map((block) => renderBlock(block, snapshot, merchant));
+  return [...layoutSchema]
+    // U-3: `visible !== false`, not `visible === true` — an absent key (every
+    // historical Bill.layoutSnapshot frozen before this field existed, and any v1
+    // array predating T-4) must render exactly as it always has, not vanish.
+    .filter((block) => block.visible !== false)
+    .sort((a, b) => a.order - b.order)
+    .map((block) => ({ ...renderBlock(block, snapshot, merchant), width: block.width ?? 'full' }));
 }

@@ -7,8 +7,10 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { LayoutSchemaV2 } from '@digital-billing/block-manifest';
-import { useBuilderState } from '../../../../src/builder/useBuilderState';
-import { ComponentsTab } from '../../../../src/builder/ComponentsTab';
+import { useBuilderState } from '../../../../../src/builder/useBuilderState';
+import { ComponentsTab } from '../../../../../src/builder/ComponentsTab';
+import { BillTab } from '../../../../../src/builder/BillTab';
+import { FinalLookTab } from '../../../../../src/builder/FinalLookTab';
 
 const API_ORIGIN = 'http://localhost:4000';
 
@@ -95,12 +97,11 @@ export default function BuilderPage() {
       </nav>
 
       <main className="builder-tab-content">
-        {/* U-3/U-4 fill in the remaining two tabs. */}
         {activeTab === 'COMPONENTS' && (
           <ComponentsTab doc={builder.doc} onEdit={builder.edit} onEditDebounced={builder.editDebounced} />
         )}
-        {activeTab === 'BILL' && <p>BILL tab — built in U-3.</p>}
-        {activeTab === 'FINAL LOOK' && <p>FINAL LOOK tab — built in U-4.</p>}
+        {activeTab === 'BILL' && <BillTab doc={builder.doc} onEdit={builder.edit} />}
+        {activeTab === 'FINAL LOOK' && <FinalLookTab doc={builder.doc} />}
       </main>
     </div>
   );

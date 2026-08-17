@@ -8,9 +8,20 @@ import { BroadcastModule } from './broadcast/broadcast.module';
 import { BillsModule } from './bills/bills.module';
 import { DemoModule } from './demo/demo.module';
 import { TemplatesModule } from './templates/templates.module';
+import { FixturesModule } from './fixtures/fixtures.module';
 
 @Module({
-  imports: [ScheduleModule.forRoot(), PrismaModule, CallbacksModule, LinksModule, BroadcastModule, BillsModule, DemoModule, TemplatesModule],
+  imports: [
+    ScheduleModule.forRoot(),
+    PrismaModule,
+    CallbacksModule,
+    LinksModule,
+    BroadcastModule,
+    BillsModule,
+    DemoModule,
+    TemplatesModule,
+    FixturesModule,
+  ],
   controllers: [HealthController],
 })
 export class AppModule {}

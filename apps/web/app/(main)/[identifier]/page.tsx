@@ -1,8 +1,8 @@
 import { notFound } from 'next/navigation';
-import { renderTemplate, LayoutBlock, BillSnapshot, BillMerchant } from '../../src/render/template-renderer';
-import { BillBlocks } from '../../src/render/BillBlocks';
-import { DownloadButton } from '../../src/render/DownloadButton';
-import { ShareButton } from '../../src/render/ShareButton';
+import { renderTemplate, LayoutBlock, BillSnapshot, BillMerchant } from '../../../src/render/template-renderer';
+import { BillBlocks } from '../../../src/render/BillBlocks';
+import { DownloadButton } from '../../../src/render/DownloadButton';
+import { ShareButton } from '../../../src/render/ShareButton';
 
 const API_BASE_URL = process.env.API_BASE_URL ?? 'http://localhost:4000';
 
