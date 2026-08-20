@@ -8,9 +8,22 @@
 // don't already provide, that's a sign the preview is diverging from
 // production, not a reason to add it here.
 import { useEffect, useState } from 'react';
-import { renderTemplate } from '../../../../../src/render/template-renderer';
+import { LayoutSchemaV2 } from '@digital-billing/block-manifest';
+import { renderTemplate, RenderedBlock, BillSnapshot } from '../../../../../src/render/template-renderer';
 import { BillBlocks } from '../../../../../src/render/BillBlocks';
 import { isPreviewMessage, PreviewMessage } from '../../../../../src/builder/preview-protocol';
+
+// Exported so X-1 (render-parity.spec.ts) can call the SAME wiring this
+// component uses, instead of a spec-local reimplementation that could
+// silently drift from what actually ships here.
+export function renderPreviewBill(doc: LayoutSchemaV2, fixture: BillSnapshot): { blocks: RenderedBlock[]; skeleton: string } {
+  const blocks = renderTemplate(doc.blocks, fixture, {
+    name: fixture.merchantName,
+    addressLine1: fixture.merchantAddress,
+    gstin: fixture.merchantGstin,
+  });
+  return { blocks, skeleton: doc.skeleton };
+}
 
 export default function PreviewFramePage() {
   const [message, setMessage] = useState<PreviewMessage | null>(null);
@@ -36,11 +49,7 @@ export default function PreviewFramePage() {
     return null; // no builder chrome, no loading text — an empty frame until the first message arrives
   }
 
-  const blocks = renderTemplate(message.doc.blocks, message.fixture, {
-    name: message.fixture.merchantName,
-    addressLine1: message.fixture.merchantAddress,
-    gstin: message.fixture.merchantGstin,
-  });
+  const rendered = renderPreviewBill(message.doc, message.fixture);
 
-  return <BillBlocks blocks={blocks} skeleton={message.doc.skeleton} />;
+  return <BillBlocks blocks={rendered.blocks} skeleton={rendered.skeleton} />;
 }

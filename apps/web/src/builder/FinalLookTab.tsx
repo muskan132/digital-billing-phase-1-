@@ -46,6 +46,16 @@ export function FinalLookTab({ doc }: FinalLookTabProps) {
     iframeRef.current?.contentWindow?.postMessage({ type: PREVIEW_MESSAGE_TYPE, doc, fixture }, window.location.origin);
   }
 
+  // Always call the CURRENT render's post() from the mount-only message
+  // listener below, never a stale closure. Without this, the "ready" message
+  // (which can arrive before the /v1/fixtures fetch resolves) would run the
+  // post() captured at mount time — closed over fixturesState:'loading' and
+  // selectedKey:null — and silently no-op, leaving the preview blank until
+  // some later state change happened to fire post() again after frameReady
+  // was already true.
+  const postRef = useRef(post);
+  postRef.current = post;
+
   // Re-post whenever the draft or the selected fixture changes — no network
   // call, just an in-browser postMessage (D-34).
   useEffect(() => {
@@ -58,7 +68,7 @@ export function FinalLookTab({ doc }: FinalLookTabProps) {
       if (event.origin !== window.location.origin) return;
       if (event.data?.type === 'digital-billing-preview-ready') {
         frameReady.current = true;
-        post();
+        postRef.current();
       }
     }
     window.addEventListener('message', onMessage);

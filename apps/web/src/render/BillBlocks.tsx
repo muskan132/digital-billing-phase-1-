@@ -16,13 +16,17 @@ export function BillBlocks({ blocks, skeleton }: { blocks: RenderedBlock[]; skel
   }
 
   const skin =
-    skeleton === 'COMPACT_THERMAL'
-      ? 'thermal'
-      : skeleton === 'RETAIL'
-        ? 'retail'
-        : skeleton === 'RESTAURANT'
-          ? 'restaurant'
-          : 'minimalist';
+    skeleton === 'MINIMALIST'
+      ? 'minimalist'
+      : skeleton === 'COMPACT_THERMAL'
+        ? 'thermal'
+        : skeleton === 'RETAIL'
+          ? 'retail'
+          : skeleton === 'RESTAURANT'
+            ? 'restaurant'
+            : (() => {
+                throw new Error(`Unknown skeleton: ${skeleton}`);
+              })();
 
   return (
     <div className={`bill-card bill-card--${skin}`}>

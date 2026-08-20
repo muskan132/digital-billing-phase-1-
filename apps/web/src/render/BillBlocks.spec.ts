@@ -69,3 +69,24 @@ describe('BillBlocks row-grouping (U-3 / TEMPLATE_SYSTEM_v2 §6)', () => {
     expect(rowMatches).toHaveLength(1);
   });
 });
+
+describe('BillBlocks skeleton validation (D-40)', () => {
+  it('throws on an unrecognized skeleton instead of falling back to a default skin', () => {
+    const rendered = renderTemplate([{ type: 'HEADER', order: 1, props: {} }], SNAPSHOT, MERCHANT);
+    expect(() =>
+      renderToStaticMarkup(
+        React.createElement(BillBlocks, { blocks: rendered, skeleton: 'NOT_A_REAL_SKELETON' }),
+      ),
+    ).toThrow('Unknown skeleton: NOT_A_REAL_SKELETON');
+  });
+
+  it.each(['MINIMALIST', 'COMPACT_THERMAL', 'RETAIL', 'RESTAURANT'])(
+    'renders without throwing for the valid skeleton %s',
+    (skeleton) => {
+      const rendered = renderTemplate([{ type: 'HEADER', order: 1, props: {} }], SNAPSHOT, MERCHANT);
+      expect(() =>
+        renderToStaticMarkup(React.createElement(BillBlocks, { blocks: rendered, skeleton })),
+      ).not.toThrow();
+    },
+  );
+});

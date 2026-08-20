@@ -1,5 +1,5 @@
 import { notFound } from 'next/navigation';
-import { renderTemplate, LayoutBlock, BillSnapshot, BillMerchant } from '../../../src/render/template-renderer';
+import { renderTemplate, RenderedBlock, LayoutBlock, BillSnapshot, BillMerchant } from '../../../src/render/template-renderer';
 import { BillBlocks } from '../../../src/render/BillBlocks';
 import { DownloadButton } from '../../../src/render/DownloadButton';
 import { ShareButton } from '../../../src/render/ShareButton';
@@ -9,12 +9,26 @@ const API_BASE_URL = process.env.API_BASE_URL ?? 'http://localhost:4000';
 // TEMPLATE_SYSTEM_v2 §7: the frozen render spec — the ONLY source of layout/skeleton
 // for rendering. Never read bill.template.layoutSchema via a live join here again;
 // that is the exact bug §7 exists to fix.
-interface BillLayoutSnapshot {
+export interface BillLayoutSnapshot {
   schemaVersion: number;
   skeleton: string;
   blocks: LayoutBlock[];
   templateId: string;
   templateVersion: number;
+}
+
+// Exported so X-1 (render-parity.spec.ts) can call the SAME wiring this page
+// uses, instead of a spec-local reimplementation that could silently drift
+// from what actually ships here. Throws exactly as renderTemplate does (D-10,
+// unknown block type) — the caller (BillPage below) is responsible for
+// catching that, same as before this was extracted.
+export function renderProductionBill(
+  layoutSnapshot: BillLayoutSnapshot,
+  snapshot: BillSnapshot,
+  merchant: BillMerchant,
+): { blocks: RenderedBlock[]; skeleton: string } {
+  const blocks = renderTemplate(layoutSnapshot.blocks, snapshot, merchant);
+  return { blocks, skeleton: layoutSnapshot.skeleton };
 }
 
 interface BillViewPayload {
@@ -86,9 +100,9 @@ export default async function BillPage({ params }: { params: Promise<{ identifie
     return <ErrorState />;
   }
 
-  let blocks;
+  let rendered;
   try {
-    blocks = renderTemplate(payload.bill.layoutSnapshot.blocks, payload.bill.snapshot, payload.merchant);
+    rendered = renderProductionBill(payload.bill.layoutSnapshot, payload.bill.snapshot, payload.merchant);
   } catch {
     // D-10: renderTemplate throws on an unknown block type — a template data bug,
     // not something to expose to a public unauthenticated page.
@@ -97,7 +111,7 @@ export default async function BillPage({ params }: { params: Promise<{ identifie
 
   return (
     <>
-      <BillBlocks blocks={blocks} skeleton={payload.bill.layoutSnapshot.skeleton} />
+      <BillBlocks blocks={rendered.blocks} skeleton={rendered.skeleton} />
       <DownloadButton />
       <ShareButton />
     </>
