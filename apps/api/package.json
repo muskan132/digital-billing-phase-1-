@@ -12,6 +12,7 @@
     "backfill:layout-snapshot": "ts-node scripts/backfill-layout-snapshot.ts",
     "migrate:layout-schema-v2": "ts-node scripts/migrate-layout-schema-v2.ts",
     "verify": "ts-node scripts/verify-v3-task.ts",
+    "verify:x2": "ts-node scripts/verify-x2-immutability-regression.ts",
     "test": "jest"
   },
   "dependencies": {
