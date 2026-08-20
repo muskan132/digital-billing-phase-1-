@@ -4,17 +4,21 @@
 // same precedent as apps/web/app/demo/page.tsx, which has no web-side gate
 // either): this route renders unconditionally and relies on the API 404ing
 // every /v1/templates/* call outside dev.
+//
+// Split-view redesign (post-X-2): COMPONENTS/BILL/FINAL LOOK's 3-tab bar is gone.
+// EditBillPanel (left) merges what those first two tabs did into one per-block
+// card; FinalLookTab (right) — reused exactly as U-4/D-34 built it, no changes —
+// is now permanently mounted instead of behind a tab. No tabs remain because
+// nothing is left to switch between; if a genuine second view appears later, a
+// tab bar is a small addition then, not something to keep around unused now.
 import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { LayoutSchemaV2 } from '@digital-billing/block-manifest';
 import { useBuilderState } from '../../../../../src/builder/useBuilderState';
-import { ComponentsTab } from '../../../../../src/builder/ComponentsTab';
-import { BillTab } from '../../../../../src/builder/BillTab';
+import { EditBillPanel } from '../../../../../src/builder/EditBillPanel';
 import { FinalLookTab } from '../../../../../src/builder/FinalLookTab';
 
 const API_ORIGIN = 'http://localhost:4000';
-
-type Tab = 'COMPONENTS' | 'BILL' | 'FINAL LOOK';
 
 interface TemplateRow {
   id: string;
@@ -27,7 +31,6 @@ type LoadState = { status: 'loading' } | { status: 'error'; message: string } | 
 export default function BuilderPage() {
   const params = useParams<{ id: string }>();
   const [loadState, setLoadState] = useState<LoadState>({ status: 'loading' });
-  const [activeTab, setActiveTab] = useState<Tab>('COMPONENTS');
   // A stable initial doc for useReducer's lazy init — replaced via load() once
   // the real template arrives, never rendered as-is (loadState gates the UI).
   const builder = useBuilderState({ schemaVersion: 2, skeleton: 'MINIMALIST', blocks: [] });
@@ -83,25 +86,11 @@ export default function BuilderPage() {
         </div>
       </header>
 
-      <nav className="builder-tabs">
-        {(['COMPONENTS', 'BILL', 'FINAL LOOK'] as const).map((tab) => (
-          <button
-            key={tab}
-            type="button"
-            aria-current={activeTab === tab}
-            onClick={() => setActiveTab(tab)}
-          >
-            {tab}
-          </button>
-        ))}
-      </nav>
-
-      <main className="builder-tab-content">
-        {activeTab === 'COMPONENTS' && (
-          <ComponentsTab doc={builder.doc} onEdit={builder.edit} onEditDebounced={builder.editDebounced} />
-        )}
-        {activeTab === 'BILL' && <BillTab doc={builder.doc} onEdit={builder.edit} />}
-        {activeTab === 'FINAL LOOK' && <FinalLookTab doc={builder.doc} />}
+      <main className="edit-bill-layout">
+        <EditBillPanel doc={builder.doc} onEdit={builder.edit} onEditDebounced={builder.editDebounced} />
+        <div className="edit-bill-preview">
+          <FinalLookTab doc={builder.doc} />
+        </div>
       </main>
     </div>
   );

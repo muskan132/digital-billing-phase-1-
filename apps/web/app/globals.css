@@ -153,3 +153,367 @@
   color: var(--semantic-error);
   font-size: 14px;
 }
+
+/* ==================== Builder UI (deferred from U-1/U-2/U-3, unblocked post-X-2) ====================
+   Internal editor chrome only — every value below is a token or pattern already used in
+   this file or bill.css (colors, 8px input/button radius, 12px card radius, the existing
+   spacing/type scale). Nothing here is a customer-facing bill skin. */
+
+.builder-shell {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 24px 16px 48px;
+}
+
+.builder-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 16px;
+  margin-bottom: 20px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.builder-header h1 {
+  font-size: 28px;
+  font-weight: 600;
+  margin: 0;
+}
+
+.builder-undo-redo {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.builder-undo-redo button {
+  background: none;
+  color: var(--ink);
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  padding: 8px 16px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.builder-undo-redo button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* ---- split-view shell: EditBillPanel (left) + permanently-mounted preview (right) ---- */
+.edit-bill-layout {
+  display: flex;
+  align-items: flex-start;
+  gap: 20px;
+}
+
+.edit-bill-panel {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 20px;
+}
+
+.edit-bill-blocks {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.edit-bill-preview {
+  flex: 0 0 420px;
+  position: sticky;
+  top: 24px;
+}
+
+@media (max-width: 960px) {
+  .edit-bill-layout,
+  .edit-bill-panel {
+    flex-direction: column;
+  }
+
+  .edit-bill-preview {
+    flex-basis: auto;
+    width: 100%;
+    position: static;
+  }
+}
+
+/* ---- one block = one card: layout controls (header) + prop editor (body) ---- */
+.block-card {
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+  padding: 20px;
+}
+
+.block-card-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-bottom: 12px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.block-card-header h3 {
+  font-size: 16px;
+  font-weight: 600;
+  margin: 0;
+  margin-right: auto;
+}
+
+.block-card-drag-handle {
+  color: var(--slate);
+  font-size: 16px;
+  line-height: 1;
+  cursor: grab;
+  padding: 0 2px;
+}
+
+.block-card-header button {
+  background: none;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  color: var(--ink);
+  padding: 5px 9px;
+  font-size: 13px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.block-card-header button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.block-card-visible {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--slate);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.block-card-header select {
+  padding: 6px 8px;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--ink);
+  background: var(--canvas);
+  flex-shrink: 0;
+}
+
+.block-card-remove {
+  color: var(--semantic-error);
+}
+
+.block-card-body > p {
+  color: var(--slate);
+  font-size: 14px;
+  margin: 0;
+}
+
+.components-tab-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--slate);
+  margin-bottom: 14px;
+}
+
+.components-tab-field:last-child {
+  margin-bottom: 0;
+}
+
+.components-tab-field input[type='text'] {
+  text-transform: none;
+  letter-spacing: normal;
+  font-weight: 400;
+  font-size: 14px;
+  color: var(--ink);
+  padding: 8px 10px;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  background: var(--canvas);
+  font-family: inherit;
+}
+
+/* Boolean fields (checkbox + propName in the same label) read as a normal-weight
+   inline row, not the uppercase text-field label style above. */
+.components-tab-field:has(input[type='checkbox']) {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  text-transform: none;
+  letter-spacing: normal;
+  font-weight: 400;
+  font-size: 14px;
+  color: var(--ink);
+}
+
+.block-card-body input[type='checkbox'] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--primary);
+  cursor: pointer;
+}
+
+.block-card-body fieldset {
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin: 0 0 14px;
+}
+
+.block-card-body fieldset:last-child {
+  margin-bottom: 0;
+}
+
+.block-card-body legend {
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--slate);
+  padding: 0 4px;
+}
+
+.block-card-body fieldset label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: var(--ink);
+  margin-bottom: 6px;
+}
+
+.block-card-body fieldset label:last-child {
+  margin-bottom: 0;
+}
+
+.components-tab-columns {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 4px;
+  font-size: 13px;
+}
+
+.components-tab-columns th {
+  text-align: left;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--slate);
+  border-bottom: 1px solid var(--hairline);
+  padding: 8px;
+  white-space: nowrap;
+}
+
+.components-tab-columns td {
+  padding: 8px;
+  border-bottom: 1px solid var(--hairline);
+  vertical-align: middle;
+}
+
+.components-tab-columns tr:last-child td {
+  border-bottom: none;
+}
+
+.components-tab-columns code {
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
+  color: var(--slate);
+  font-size: 12px;
+}
+
+.components-tab-columns input[type='text'] {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--ink);
+  background: var(--canvas);
+  font-family: inherit;
+}
+
+.components-tab-columns select {
+  padding: 6px 8px;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--ink);
+  background: var(--canvas);
+}
+
+.components-tab-columns button {
+  background: none;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  color: var(--ink);
+  padding: 4px 8px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.components-tab-columns button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.components-tab-columns button + button {
+  margin-left: 4px;
+}
+
+/* ---- block palette (EditBillPanel) ---- */
+.bill-tab-palette {
+  flex: 0 0 220px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+  padding: 16px;
+}
+
+.bill-tab-palette h3 {
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--slate);
+  margin: 0 0 4px;
+}
+
+.bill-tab-palette button {
+  background: none;
+  color: var(--primary);
+  border: 1px dashed var(--primary);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+@media (max-width: 960px) {
+  .bill-tab-palette {
+    flex-basis: auto;
+    width: 100%;
+  }
+}
