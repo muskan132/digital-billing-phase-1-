@@ -208,3 +208,109 @@ Within a line, the CGST/SGST split is `cgst[i] = (tax[i] + 1n) / 2n` and `sgst[i
 
 ### D-40 · skeleton values are validated the same way block types are (D-10)
 **Decision:** an unrecognized `Template.skeleton` must throw, never silently fall back to a default skin. A bad seed, migration, or merchant edit producing an invalid skeleton is a data-integrity bug and must surface immediately, not render successfully with the wrong appearance.
+
+---
+# Phase 4 — Merchant self-service portal
+
+### D-41 · The portal principal is `User`, not `Merchant`
+**Decision:** the thing that logs in is a `User` row with `type = EXTERNAL` and a non-null `merchantId`. `merchantId` is derived from the user on every request; a `User` with `merchantId = NULL` (an INTERNAL platform user) can complete the IdP flow and is still refused a portal session.
+**Reason:** `User.type` and `User.merchantId` already exist and already encode exactly this distinction — the schema anticipated this phase and needs no new tenancy concept. `portals.md` also forbids sharing sessions across portals: an INTERNAL user belongs to the Admin/Support portal, which has a different auth model and a different permission ceiling, so accepting one here would silently create a second portal inside this one.
+**Runner-up:** authenticate the `Merchant` directly and skip `User`. Rejected: it makes multi-user-per-merchant a schema change later rather than a UI change, and it throws away the role column `rbac.md` requires guards to honour.
+
+### D-42 · C1 resolution — two principal classes, two answers. Human login is OIDC; no password is ever stored
+**Decision:** C1 as recorded in `PENDING_WORK.md` conflates two questions that `rbac.md` keeps separate, and they are answered separately.
+- **Calling system (`POST /v1/bills`, D-19):** the organisation's position is already on record — Blueprint §7.1 and ADR-7 specify **OAuth2 client-credentials scoped to `merchant_id`**, with mTLS optional for high-volume partners, and explicitly **reject API keys as the sole mechanism** (no expiry, no scoping, painful rotation). That is the target. It is **not built in this phase** and `MerchantApiKey` + `ApiKeyGuard` remain the local-only stopgap D-19 already scoped them as. C1 stays open as an *implementation* item; its *direction* is no longer open.
+- **Human portal user (this phase):** **OIDC Relying Party** (authorization code + PKCE), matching Blueprint §7.1's "OIDC + MFA, SSO with Jio identity where available" for merchant dashboard users. **The portal stores no password, no OTP, and no local credential of any kind.** Locally, a dev IdP container issues the tokens, so the code path that ships is the code path that runs against the real IdP — the change is issuer/client configuration, not code.
+**Reason:** the safest default to build against is the one the organisation has already written down. Choosing anything else here would mean either building a credential store we intend to throw away, or contradicting a ratified architecture position on our own authority. Local password auth was the tempting shortcut: it needs no container and no IdP, and it is the worst option, because a password column is the kind of thing that survives "temporary" and lands in production carrying real credentials.
+**Runner-up:** email + password with Argon2id, IdP deferred. Rejected on the above; it also puts MFA, reset, and lockout — all explicitly out of scope — on our side of the line instead of the IdP's.
+**NEEDS ORGANISATION SIGN-OFF, NOT RESOLVED HERE:** which IdP, which realm/tenant, client registration and secret provisioning, MFA policy for `MERCHANT_ADMIN`, and how a merchant user's `subject` gets provisioned in the first place (the signup gap — out of scope by instruction, but it is the missing half of this flow). Owner: Security + Platform. Until answered, the local dev IdP is the stand-in and **`/portal` must not reach any non-local environment**, exactly as D-38 says of the builder.
+
+### D-43 · A session is an opaque server-side token, not a JWT
+**Decision:** on successful login the server generates a high-entropy random token, stores its SHA-256 in `MerchantSession`, and returns the plaintext once in a cookie. Every request hashes the cookie and loads the row. No claims travel in the token; `merchantId` and `role` are read from the database on each request.
+**Reason:** revocation. A stateless JWT cannot be killed before expiry without a denylist — which is a database read on every request, i.e. exactly the cost the JWT was meant to avoid, minus the ability to disable a user mid-session. Blueprint §7.1's short-lived JWT is a *BFF-to-service* token, not a browser session, and there is no BFF here; `tech-stack.md` says the same ("short-lived JWTs appear only as BFF session tokens").
+**Runner-up:** signed cookie / JWT with a 15-minute expiry and silent refresh. Rejected: buys a saved query, costs instant revocation and forces refresh-token machinery this phase does not need.
+**Consequence:** session storage is Postgres, not Redis (Blueprint §5's target). It sits behind a `SessionStore` port so the swap is an adapter.
+
+### D-44 · Cookie-based sessions require CSRF defence, and it is Tier-1
+**Decision:** cookie attributes `HttpOnly`, `SameSite=Lax`, `Path=/`, no `Domain`, `Secure` on by configuration everywhere except local HTTP. Every state-changing `/portal` route additionally requires a double-submit CSRF token; a missing or mismatched token is rejected before any handler runs.
+**Reason:** choosing a cookie (D-43) is choosing ambient authority — the browser attaches it to cross-site requests too. `SameSite=Lax` alone stops top-level cross-site `POST`s in current browsers but is a browser-version-dependent guarantee, and the write it protects here forks templates that render on a public compliance document. Defence that depends on the user's browser version is not defence.
+**Runner-up:** `SameSite=Strict` and no token. Rejected: breaks the IdP redirect return and still leaves the guarantee browser-dependent.
+
+### D-45 · Eligibility is re-checked on every request, not just at login
+**Decision:** `SessionGuard` re-loads the `User` on every request and refuses the session if `disabledAt` is set, `merchantId` became null, or `type` is not `EXTERNAL` — in addition to the session's own expiry and revocation.
+**Reason:** the alternative is that disabling a merchant user takes effect only at their next login, which for a live session is "never". This is the same principle as `rbac.md`'s "never re-derive identity in a service; always re-check scope" — the check has to be on the hot path or it is not a check.
+**Cost, accepted:** one extra join per request. Named so it is not rediscovered as a performance surprise.
+
+### D-46 · `merchantId` comes from a `MerchantContext` resolver; `SEED_MERCHANT_ID` is confined to one file
+**Decision:** every merchant-scoped service takes `merchantId` as an argument. A guard populates `MerchantContext { userId, merchantId, role }`: `SessionGuard` from the session, `DemoOnlyGuard` from `SEED_MERCHANT_ID`. No service, repository, or React component reads the constant or the environment. A-4 is the audit task that makes this true and records the full inventory of sites it moved.
+**Reason:** D-38 predicted precisely this — "adding auth later changes where `merchantId` comes from, not what every query looks like" — and this is the task that collects on that. One resolver is also the only structure that lets `/demo` and `/portal` share every service without a flag inside the service.
+**Verification, not assertion:** the inventory is produced by `grep`, not from memory. The known starting set is `DemoOnlyGuard`-gated controllers, the builder pages, and `templates.service.ts`; seeds and scripts must be swept too. The check that this holds is `grep -rn "SEED_MERCHANT_ID" apps/ packages/ --include=*.ts` returning one non-test file.
+
+### D-47 · Cross-tenant access returns 404, never 403
+**Decision:** a `/portal` request for a `billId`, `templateId`, or `identifier` belonging to another merchant returns `404` with a body that does not distinguish "not yours" from "does not exist".
+**Reason:** the demo-endpoint precedent, applied to resources instead of routes: `403` confirms the id is real and turns any id field into an existence oracle. `cuid`s are not enumerable, but the resource id often arrives from somewhere else (a link, an email, a leaked log), and `403` is what makes it useful.
+
+### D-48 · The merchant-visible contact projection is a NEW PII boundary, not a relaxation of D-17/D-28
+**Decision:** the portal may show a merchant their own customers' contact details, in a projection that is defined, whitelisted, and enforced independently of the `Bill.snapshot` whitelist:
+- **List (`GET /portal/bills`): masked only** — e.g. `98****3210`, `a***@example.com`.
+- **Detail (`GET /portal/bills/:id`): full value**, and only these fields: `customerMobile_pii`, `customerEmail_pii`, plus `Broadcast.{channel, status, attempts, sentAt}` and the **masked** `Broadcast.recipient`.
+- Enforced in the portal DTO **at the writer** (the serializer), with a key-set test, per the boundary-enforcement principle — not as a comment at the reader.
+- Never logged, never in an error body, never in an event.
+**Reason:** this is a different principal reading different data for a different reason, not the same rule loosened. D-17/D-28 govern `Bill.snapshot`, which is read by an **anonymous** visitor holding only a URL; nothing about the merchant's own access changes that, and `Bill.snapshot` gains **zero** fields from this decision — it stays PII-free forever. The merchant is the party that captured the contact detail in the first place and is the data controller for it; withholding it from them protects nobody. Masking the list anyway is because a list is the shape that gets screenshotted, shoulder-surfed, and eventually exported, and a merchant almost never needs 50 phone numbers at once — they need one.
+**Named residual risk:** there is no audit trail on these reads. `security.md` requires PII *exports* to be audited; single-record reads by the owning merchant are not exports, which is why export is out of scope for this phase (see GAPS). If export is ever built, it needs an audit table first, not after.
+**Explicitly unchanged:** the public bill page, the renderer, `Bill.snapshot`, `Bill.layoutSnapshot`, and the L-2 whitelist. A UAT step asserts the public page for the same bill still contains no contact data.
+
+### D-49 · `/demo` coexists indefinitely; convergence by rule, not by deletion
+**Decision:** `/demo/*` and `DemoOnlyGuard` stay exactly as they are. `/portal` is additive. The standing rule from this phase forward: **new merchant-facing functionality is built at `/portal` first**; a demo route may alias it, but no feature is built demo-only again. `/demo` is deleted only when it holds nothing the portal does not, and that deletion is its own task in a later phase.
+**Reason:** the demo panel is real, working local tooling with no login step, and deleting it would slow down every subsequent phase's manual verification for a tidiness gain. Sharing one service layer through D-46's resolver means the two routes cannot drift in behaviour — which is the actual risk of keeping both, and it is structurally closed rather than promised.
+**Runner-up:** fold `/demo` into `/portal` now with an auto-login shortcut. Rejected: an auto-login bypass is a real authentication bypass living in the same code as real authentication — a far worse object to own than a separate gated route.
+
+### D-50 · Roles are enforced at the guard now; user management is deferred
+**Decision:** `SessionGuard` checks `User.role` against the `rbac.md` role table for every `/portal` route (builder writes require `MERCHANT_ADMIN`; history is readable by `MERCHANT_ADMIN` and `STORE_STAFF`). The schema already supports N users per merchant and nothing in this phase prevents that; what is deferred is the **UI and API to create, invite, disable, or re-role a user**, and any store-scoped assignment.
+**Reason:** writing the gate now costs one line per route and means adding a second user later is a data change, not a security review. Deferring the gate would mean every `/portal` route is implicitly `MERCHANT_ADMIN`, and un-picking that after the fact is the expensive direction.
+**Named gap:** only one `MERCHANT_ADMIN` is seeded, so the `STORE_STAFF` paths are **written but not exercised**. They must be tested with a real second seeded user before any non-local deployment; a role gate nobody has ever hit is a claim, not a control.
+
+### D-51 · Session rows are the one carve-out from the no-hard-delete rule
+**Decision:** expired `MerchantSession` rows may be hard-deleted by a reaper job. Every other entity in this system remains soft-archive-only (D-33). Revocation is still a state change (`revokedAt`), never a delete — only *expiry* permits removal, and only after `expiresAt` has passed.
+**Reason:** the no-hard-delete rule exists because business documents must stay auditable and because `Bill.templateId` makes deletion structurally impossible anyway. A session is neither: nothing references it by FK, it carries no business fact, and it accumulates one row per login forever. Writing this down as a decision rather than letting a cleanup script quietly appear is the point — an undocumented exception to a project-wide invariant is how the invariant stops meaning anything.
+**Consequence:** "who logged in when" is **not** recoverable from this table after reaping. `User.lastLoginAt` is the only login trace that survives, and it is a single overwritten timestamp, not a history. If a login audit trail is ever required, it is a separate append-only table — not a reason to stop reaping sessions.
+**Reaper is not in the v4 roadmap.** Row growth on a single-merchant local database is not a problem worth a scheduled job yet; this decision authorises the reaper, it does not schedule it.
+
+### D-52 · Local dev IdP is `node-oidc-provider`, run as a workspace app — no new container image
+**Decision:** the local OpenID Provider is **`node-oidc-provider`** (the `panva` library), run as a small app in the existing pnpm workspace, with the portal's RP side using its sibling **`openid-client`**. Its built-in dev interaction views supply the login screen. No new Docker image; `docker compose` gains no service, only the existing Node runtime gains one more process under `dev-up.ps1`.
+**Reason (one line):** it is an OpenID-certified implementation in the stack the repo already runs, so the RP code exercises real spec behaviour — JWKS rotation, `nonce`, PKCE, discovery — without adding a JVM container to a dev loop that already fights orphaned Node processes on ports 3000/4000.
+**Runner-up:** **Keycloak**. It is the closest thing to the enterprise IdP this will eventually point at (realms, MFA policy, admin console), and that realism is genuinely worth something for D-42's unresolved MFA question. Rejected for now on weight: a JVM container with a multi-second cold start, on every local run, to serve a login form. If Security names Keycloak as the production IdP, revisit — the RP side does not change, which is the whole point of the port in A-1.
+**Also rejected:** `oauth2-mock-server` and similar token-minting mocks — they skip the authorization-code interaction entirely, so the flow we test is not the flow we ship, which defeats D-42's stated reason for choosing OIDC in the first place.
+**VOLATILE FACT — verify at install, do not take from this document (D-36 precedent):** the current major version, its maintenance status, its Node version floor, and whether `devInteractions` is still enabled by default. My reading of the last two is **likely, not verified** — if `devInteractions` has been removed or defaults off, a minimal interaction route must be written, which is a small addition to A-1's scope, not a reason to change the choice.
+**Blast radius — CORRECTED (this entry originally said "this dependency is dev-only", which was wrong and would have misled the A-1 implementer):** the two packages have **opposite** lifetimes and must never be described together. `openid-client` is the RP side — it **ships**, and is a real production `dependency` of `apps/api`. Only `node-oidc-provider` is dev-only. Neither touches a persisted shape, a money path, or a PII column. In any non-local environment the `IdentityProvider` port points at the real IdP and `node-oidc-provider` is not loaded. The enforcement mechanism is D-53.
+
+### D-53 · The dev IdP is isolated by workspace topology, not by a dependency label
+**Decision:** `node-oidc-provider` is a `dependency` of a **separate workspace app, `apps/dev-idp`**, and appears in **no other `package.json` in the repo**. `apps/api` never lists it, never imports it, and cannot resolve it. `openid-client` (the RP side) is a normal production `dependency` of `apps/api` and **ships** — it is not part of this isolation and must not be moved.
+
+```jsonc
+// apps/api/package.json          — the RP. SHIPS.
+{ "dependencies": { "openid-client": "^6.x" } }        // node-oidc-provider absent, in BOTH blocks
+
+// apps/dev-idp/package.json      — the OP. Never built for production.
+{ "private": true,
+  "dependencies": { "node-oidc-provider": "^9.11.3" }, // pinned range verified at install (D-36)
+  "scripts": { "dev": "tsx src/main.ts" } }            // no "build" script — nothing to ship
+
+// pnpm-workspace.yaml            — already lists apps/*; no change needed
+```
+
+**Reason:** pnpm's non-hoisted `node_modules` makes this structural rather than procedural. A package absent from `apps/api/package.json` is **not resolvable** from `apps/api` source — `import "node-oidc-provider"` fails at typecheck and at build, not at runtime in production. That is "make the invalid state unrepresentable" (the §7 principle) applied to a dependency graph.
+**Runner-up:** put `node-oidc-provider` in `apps/api`'s `devDependencies`. **Rejected** — and this is the trap worth naming, because it is the obvious answer. A `devDependency` is fully resolvable and importable from `apps/api` source; the label only governs what `pnpm install --prod` fetches, not what the code may reference. A bundler following a real import will happily inline it, and the failure appears in a production bundle, not in CI. `devDependencies` is a rule someone has to remember; a missing workspace edge is a compiler error.
+**Belt-and-braces, both cheap:** `apps/dev-idp` refuses to boot when `NODE_ENV=production`; CI asserts the isolation rather than trusting it (see A-1's verify step).
+**Standing rule:** any future dev-only service (a mock PG, a mock SMS provider) follows this same topology. Do not start a `devDependencies` precedent here.
+
+### D-54 · What the dev IdP proves, and what it does not — `devInteractions` accepts any credentials
+**Decision:** `node-oidc-provider`'s `devInteractions` (verified: defaults to `true` in 9.11.3) accepts **any username and any password**. There is no credential store behind it locally. This is recorded as an explicit scope boundary in A-1's plan, in the `apps/dev-idp` README, and in a comment at the top of the RP adapter — not left for a reader to infer.
+
+| Exercised locally, genuinely | **Not** exercised locally, at all |
+|---|---|
+| RP protocol handling: discovery, PKCE, `state`, `nonce`, JWKS verification, `id_token` signature and claim validation, failure paths | **Whether the person logging in is who they claim to be.** No password is checked, no MFA is performed, no lockout, no rate limit |
+| **Our authorization**: D-41's eligibility gate, D-45's per-request re-check, D-50's role gate, D-47's cross-tenant 404 | Anything an IdP would enforce: credential strength, account lockout, session policy at the IdP, MFA for `MERCHANT_ADMIN` |
+
+**Reason:** this is D-42's own logic followed to its conclusion — the reason for choosing OIDC was to put credential verification **on the IdP's side of the line**, permanently. A local setup that verified credentials would mean we had built a credential store, which is exactly what D-42 refuses. So the gap is not a shortcoming of the dev setup; it is the shape of the decision, visible. The danger is only that a future reader sees a working login screen and concludes authentication is tested.
+**Consequence, stated plainly:** a green A-1 and A-2 mean **"the RP handles the protocol correctly and our authorization gates work"**. They do **not** mean authentication works. Authentication cannot be tested in this repo at all, by design, and its correctness is entirely inherited from whichever IdP D-42's open sign-off eventually names — which is one more reason that sign-off is a pre-production blocker and not a formality.

@@ -84,13 +84,29 @@ model Merchant {
 }
 
 model User {
-  id         String    @id @default(cuid())
-  merchantId String?
-  merchant   Merchant? @relation(fields: [merchantId], references: [id])
-  type       UserType
-  role       UserRole
-  email      String    @unique
-  createdAt  DateTime  @default(now())
+  id          String            @id @default(cuid())
+  merchantId  String?
+  merchant    Merchant?         @relation(fields: [merchantId], references: [id])
+  type        UserType
+  role        UserRole
+  email       String            @unique
+  subject     String?           @unique // v4 (D-42): the IdP's `sub` claim. NULL = provisioned but never logged in
+  disabledAt  DateTime?                 // v4 (D-45): soft disable, re-checked on every request
+  lastLoginAt DateTime?                 // v4: operational only, never an authorization input
+  sessions    MerchantSession[]
+  createdAt   DateTime          @default(now())
+}
+
+model MerchantSession {                                 // v4 (D-43): opaque server-side session, NOT a JWT
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id])
+  tokenHash Bytes     @unique                            // SHA-256 of the cookie value; plaintext never persisted
+  expiresAt DateTime                                     // absolute expiry, no sliding renewal in v4
+  revokedAt DateTime?                                    // logout / forced revocation — a state, never a delete (D-51)
+  createdAt DateTime  @default(now())
+
+  @@index([userId, revokedAt])
 }
 
 model Template {

@@ -48,14 +48,29 @@ model MerchantApiKey {                                // v2: direct-API credenti
   @@index([merchantId, status])
 }
 
-model User {                                          // v1: seeded, NO auth
+model User {                                          // v1: seeded, NO auth. v4: the portal principal (D-41)
   id         String   @id @default(cuid())
-  merchantId String?                                  // NULL for INTERNAL platform users
+  merchantId String?                                  // NULL for INTERNAL platform users. v4: portal login REQUIRES non-null
   merchant   Merchant? @relation(fields: [merchantId], references: [id])
   type       UserType
   role       UserRole
   email      String   @unique
+  subject    String?  @unique                         // v4: the IdP's `sub` claim. The ONLY join from an id_token to a local user (D-42). NULL = provisioned but never logged in
+  disabledAt DateTime?                                // v4: soft disable — re-checked on EVERY request, not just at login (D-45). No hard delete
+  lastLoginAt DateTime?                               // v4: operational only; never an authorization input
+  sessions   MerchantSession[]                        // v4 (D-45)
   createdAt  DateTime @default(now())
+}
+
+model MerchantSession {                               // v4: server-side session. Opaque token, hashed at rest — NOT a JWT (D-43)
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id])
+  tokenHash  Bytes    @unique                         // SHA-256 of the cookie value. The plaintext exists once, in the Set-Cookie header. Never logged
+  expiresAt  DateTime                                 // absolute expiry; no sliding renewal in v4
+  revokedAt  DateTime?                                // logout / forced revocation. Revocation is a STATE, not a delete
+  createdAt  DateTime @default(now())
+  @@index([userId, revokedAt])                        // "kill every session for this user"
 }
 
 model Template {                                      // v1: predefined, 1-2 seeded rows. v3: library presets + merchant-owned forks (D-32)
@@ -238,3 +253,15 @@ Canonical definition and rationale: `TEMPLATE_SYSTEM_v2.md` §2. Restated here o
 - `Template` gains no `isDefault` column. `Merchant.defaultTemplateId` remains the single source of truth for "the default", and the fork transaction repoints it (D-39, D-32).
 - Fork-on-write means `Template` rows accumulate. `isHead` + `archivedAt` are what keep the builder's list finite; `parentTemplateId` is history, not a query key.
 - Nothing in Phase 3 touches a money column, a `_pii` column, `Bill.snapshot`, or the D-28 whitelist. Preview data is synthetic (D-35), so the builder surface holds no customer data at all.
+
+---
+
+## v4 notes — portal session & credentials
+
+- **No password column exists, anywhere, deliberately.** The portal is an OIDC Relying Party; the credential lives at the IdP (D-42). `User.subject` is the only thing an `id_token` maps to. If a password field ever appears in this schema, D-42 was reversed and that reversal needs its own decision entry.
+- **`MerchantSession` has no `status` enum.** "Active" is derived (`revokedAt IS NULL AND expiresAt > now()`), following D-39: one representation per fact, no invariant for code to remember.
+- **`MerchantSession` carries no `merchantId`.** Tenancy is derived through `User` on every load. Denormalizing it would create a second copy of the tenancy root that could drift from the user's actual merchant — the one thing that must never be wrong (D-46).
+- **`tokenHash` is SHA-256, not a password KDF** — the token is high-entropy random, so a slow KDF buys nothing. Same reasoning as `MerchantApiKey.keyHash` (D-19). There is no `tokenPrefix`: unlike an API key, a session is never listed or labelled, so lookup is an exact match on the unique hash.
+- **Expired session rows may be hard-deleted by a reaper.** This is the one carve-out from the project-wide no-hard-delete rule and it is explicit, not an oversight: a session is operational state, not a business document (D-49). Nothing references a session row by FK.
+- **`MerchantApiKey` (D-19) is untouched.** It authenticates a *calling system*; `MerchantSession` authenticates a *human*. Two principal classes, two credential stores, never conflated — the same reasoning that kept `MerchantApiKey` out of `Merchant.secretKeyEnc`.
+- **No `Order`, `OrderItem`, `Bill`, `Link`, `Broadcast`, or `Template` column changes in v4.** The merchant-visible contact projection (D-48) reads existing `Order.customerMobile_pii` / `customerEmail_pii` through a portal DTO whitelist; it adds no column and does **not** touch `Bill.snapshot` or the D-17/D-28 whitelist.
