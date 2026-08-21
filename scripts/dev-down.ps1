@@ -1,6 +1,6 @@
 <#
   dev-down.ps1 - cleanly stop everything scripts/dev-up.ps1 started:
-  the two dev-server terminal windows (apps/api, apps/web) and the
+  the dev-server terminal windows (apps/api, apps/web, apps/dev-idp) and the
   docker compose services.
 #>
 
@@ -31,6 +31,7 @@ if (Test-Path $PidFile) {
     Write-Host "1/2 Stopping dev server windows..." -ForegroundColor Cyan
     if ($recordedPids.apiPid) { Stop-ProcessTree -ProcessId $recordedPids.apiPid -Label 'apps/api' }
     if ($recordedPids.webPid) { Stop-ProcessTree -ProcessId $recordedPids.webPid -Label 'apps/web' }
+    if ($recordedPids.devIdpPid) { Stop-ProcessTree -ProcessId $recordedPids.devIdpPid -Label 'apps/dev-idp' }
 
     Remove-Item $PidFile -Force
 } else {

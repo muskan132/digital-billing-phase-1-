@@ -1,0 +1,15 @@
+{
+  "name": "@digital-billing/dev-idp",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "dev": "tsx src/main.ts"
+  },
+  "dependencies": {
+    "oidc-provider": "^9.11.3"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

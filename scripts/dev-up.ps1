@@ -30,12 +30,15 @@ $DevDir = Join-Path $RepoRoot '.dev'
 $PidFile = Join-Path $DevDir 'pids.json'
 $ApiLog = Join-Path $DevDir 'api.log'
 $WebLog = Join-Path $DevDir 'web.log'
+$DevIdpLog = Join-Path $DevDir 'dev-idp.log'
 
 $ApiHealthUrl = 'http://localhost:4000/health'
 $WebUrl = 'http://localhost:3000'
+$DevIdpUrl = 'http://localhost:9000/.well-known/openid-configuration'
 $ApiPort = 4000
 $WebPort = 3000
 $StudioPort = 5555
+$DevIdpPort = 9000
 
 if (-not (Test-Path $DevDir)) {
     New-Item -ItemType Directory -Path $DevDir | Out-Null
@@ -165,9 +168,9 @@ $mailhogUp = Wait-ForComposeService -Service 'mailhog' -TimeoutSeconds 60
 if ($mailhogUp) { Write-Ok "mailhog running" } else { Write-Fail "mailhog did not come up in time"; exit 1 }
 
 # ---------------------------------------------------------------------------
-# 3. Kill stale processes on 4000 / 3000 / 5555, unconditionally, every run.
+# 3. Kill stale processes on 4000 / 3000 / 5555 / 9000, unconditionally, every run.
 # ---------------------------------------------------------------------------
-Write-Step "3/6 Clearing stale processes on ports 4000, 3000, 5555..."
+Write-Step "3/7 Clearing stale processes on ports 4000, 3000, 5555, 9000..."
 
 function Stop-StaleProcessOnPort {
     param([int]$Port)
@@ -193,6 +196,7 @@ function Stop-StaleProcessOnPort {
 Stop-StaleProcessOnPort -Port $ApiPort
 Stop-StaleProcessOnPort -Port $WebPort
 Stop-StaleProcessOnPort -Port $StudioPort
+Stop-StaleProcessOnPort -Port $DevIdpPort
 Write-Ok "ports cleared"
 
 # ---------------------------------------------------------------------------
@@ -216,9 +220,28 @@ function Wait-ForUrl {
 }
 
 # ---------------------------------------------------------------------------
-# 4. apps/api dev server, own visible terminal, poll /health
+# 4. apps/dev-idp (A-1's local OIDC Provider, D-52/D-53) - own visible
+#    terminal, poll its discovery document. Dev-only, never apps/api's
+#    concern (D-53's isolation) - started here as its own workspace process.
 # ---------------------------------------------------------------------------
-Write-Step "4/6 Starting apps/api dev server (new window)..."
+Write-Step "4/7 Starting apps/dev-idp (new window)..."
+
+$devIdpWindowCmd = "`$host.UI.RawUI.WindowTitle = 'digital-billing: dev-idp'; Set-Location '$RepoRoot'; pnpm --filter @digital-billing/dev-idp run dev 2>&1 | Tee-Object -FilePath '$DevIdpLog'"
+$devIdpProcess = Start-Process -FilePath 'powershell.exe' `
+    -ArgumentList '-NoExit', '-NoProfile', '-Command', $devIdpWindowCmd `
+    -PassThru
+
+Write-Host "  window opened (PID $($devIdpProcess.Id)), waiting for http://localhost:9000/.well-known/openid-configuration..."
+$devIdpUp = Wait-ForUrl -Url $DevIdpUrl -Label 'apps/dev-idp' -TimeoutSeconds 60
+if ($devIdpUp) { Write-Ok "apps/dev-idp responding on :9000" } else {
+    Write-Fail "apps/dev-idp did not respond within 60s - check its terminal window / $DevIdpLog"
+    exit 1
+}
+
+# ---------------------------------------------------------------------------
+# 5. apps/api dev server, own visible terminal, poll /health
+# ---------------------------------------------------------------------------
+Write-Step "5/7 Starting apps/api dev server (new window)..."
 
 $apiWindowCmd = "`$host.UI.RawUI.WindowTitle = 'digital-billing: api (start:dev)'; Set-Location '$RepoRoot'; pnpm --filter @digital-billing/api run start:dev 2>&1 | Tee-Object -FilePath '$ApiLog'"
 $apiProcess = Start-Process -FilePath 'powershell.exe' `
@@ -233,9 +256,9 @@ if ($apiUp) { Write-Ok "apps/api responding on :4000/health" } else {
 }
 
 # ---------------------------------------------------------------------------
-# 5. apps/web dev server, own visible terminal, poll root
+# 6. apps/web dev server, own visible terminal, poll root
 # ---------------------------------------------------------------------------
-Write-Step "5/6 Starting apps/web dev server (new window)..."
+Write-Step "6/7 Starting apps/web dev server (new window)..."
 
 $webWindowCmd = "`$host.UI.RawUI.WindowTitle = 'digital-billing: web (dev)'; Set-Location '$RepoRoot'; pnpm --filter @digital-billing/web run dev 2>&1 | Tee-Object -FilePath '$WebLog'"
 $webProcess = Start-Process -FilePath 'powershell.exe' `
@@ -249,11 +272,11 @@ if ($webUp) { Write-Ok "apps/web responding on :3000" } else {
     exit 1
 }
 
-# Record the two terminal-window PIDs for dev-down.ps1
-@{ apiPid = $apiProcess.Id; webPid = $webProcess.Id } | ConvertTo-Json | Set-Content -Path $PidFile
+# Record the three terminal-window PIDs for dev-down.ps1
+@{ apiPid = $apiProcess.Id; webPid = $webProcess.Id; devIdpPid = $devIdpProcess.Id } | ConvertTo-Json | Set-Content -Path $PidFile
 
 # ---------------------------------------------------------------------------
-# 6. Ready
+# 7. Ready
 # ---------------------------------------------------------------------------
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Green
@@ -261,6 +284,7 @@ Write-Host " EVERYTHING IS READY" -ForegroundColor Green
 Write-Host "========================================" -ForegroundColor Green
 Write-Host "  App           : http://localhost:3000"
 Write-Host "  API health    : http://localhost:4000/health"
+Write-Host "  Dev IdP       : http://localhost:9000/.well-known/openid-configuration"
 Write-Host "  Mailhog UI    : http://localhost:8025"
 Write-Host "  Prisma Studio : pnpm --filter @digital-billing/api exec prisma studio"
 Write-Host ""

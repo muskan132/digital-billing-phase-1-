@@ -13,6 +13,7 @@
     "migrate:layout-schema-v2": "ts-node scripts/migrate-layout-schema-v2.ts",
     "verify": "ts-node scripts/verify-v3-task.ts",
     "verify:x2": "ts-node scripts/verify-x2-immutability-regression.ts",
+    "verify:a1": "ts-node scripts/verify-a1-oidc-roundtrip.ts",
     "test": "jest"
   },
   "dependencies": {
@@ -26,6 +27,7 @@
     "class-validator": "^0.14.1",
     "nanoid": "^3.3.16",
     "nodemailer": "^9.0.3",
+    "openid-client": "^6.1.0",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1"
   },
