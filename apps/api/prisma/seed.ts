@@ -70,12 +70,17 @@ async function main() {
       type: 'EXTERNAL',
       role: 'MERCHANT_ADMIN',
       email: 'merchant-admin@demo-merchant.test',
+      // D-42: the ONLY join from an id_token's `sub` claim to this row.
+      // Matches apps/dev-idp/src/main.ts's SEEDED_SUBJECT exactly — without
+      // this, A-2's login can never resolve to a real User.
+      subject: USER_MERCHANT_ADMIN_ID,
     },
     update: {
       merchantId: MERCHANT_ID,
       type: 'EXTERNAL',
       role: 'MERCHANT_ADMIN',
       email: 'merchant-admin@demo-merchant.test',
+      subject: USER_MERCHANT_ADMIN_ID,
     },
   });
 

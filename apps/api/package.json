@@ -14,6 +14,7 @@
     "verify": "ts-node scripts/verify-v3-task.ts",
     "verify:x2": "ts-node scripts/verify-x2-immutability-regression.ts",
     "verify:a1": "ts-node scripts/verify-a1-oidc-roundtrip.ts",
+    "verify:a2": "ts-node scripts/verify-a2-login-session.ts",
     "test": "jest"
   },
   "dependencies": {

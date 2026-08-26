@@ -53,10 +53,14 @@ const oidc = new Provider(ISSUER, {
   claims: {
     openid: ['sub'],
   },
+  // D-54: no credential store — this accepts ANY subject the login form
+  // submits, exactly like devInteractions accepts any username/password.
+  // Restricting this to one hardcoded subject would make it impossible to
+  // test apps/api's OWN rejection paths (unknown subject, ineligible user
+  // type, disabled user) — this IdP has no opinion on identity validity,
+  // that judgment belongs entirely to apps/api's User table + eligibility
+  // check (D-41/D-45), never to the IdP.
   findAccount(_ctx, sub) {
-    if (sub !== SEEDED_SUBJECT) {
-      return undefined;
-    }
     return {
       accountId: sub,
       async claims() {

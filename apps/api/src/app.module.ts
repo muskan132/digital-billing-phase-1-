@@ -9,6 +9,7 @@ import { BillsModule } from './bills/bills.module';
 import { DemoModule } from './demo/demo.module';
 import { TemplatesModule } from './templates/templates.module';
 import { FixturesModule } from './fixtures/fixtures.module';
+import { AuthModule } from './auth/auth.module';
 
 @Module({
   imports: [
@@ -21,6 +22,7 @@ import { FixturesModule } from './fixtures/fixtures.module';
     DemoModule,
     TemplatesModule,
     FixturesModule,
+    AuthModule,
   ],
   controllers: [HealthController],
 })
