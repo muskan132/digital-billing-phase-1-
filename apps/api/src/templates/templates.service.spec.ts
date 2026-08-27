@@ -2,6 +2,10 @@ import { ConflictException, NotFoundException, UnprocessableEntityException } fr
 import { PrismaService } from '../prisma/prisma.service';
 import { SaveTemplateBody, TemplatesService } from './templates.service';
 
+// A-4: merchantId is now a parameter, resolved by the caller (DemoOnlyGuard
+// today) — this is the test's own stand-in for that, not read by the service.
+const MERCHANT_ID = 'seed-merchant-demo';
+
 const LIBRARY_TEMPLATE = {
   id: 'seed-template-receipt',
   merchantId: null,
@@ -78,7 +82,7 @@ describe('TemplatesService', () => {
 
   describe('list', () => {
     it('queries for head, non-archived rows scoped to the seeded merchant or library presets', async () => {
-      await service.list();
+      await service.list(MERCHANT_ID);
 
       expect(templateFindMany).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -92,14 +96,14 @@ describe('TemplatesService', () => {
     });
 
     it('returns whatever the scoped query resolves', async () => {
-      const result = await service.list();
+      const result = await service.list(MERCHANT_ID);
       expect(result).toEqual([LIBRARY_TEMPLATE, MERCHANT_OWNED_TEMPLATE]);
     });
   });
 
   describe('findOne', () => {
     it('queries by id within the same merchant/library scope, not restricted to isHead', async () => {
-      await service.findOne('seed-template-receipt');
+      await service.findOne('seed-template-receipt', MERCHANT_ID);
 
       expect(templateFindFirst).toHaveBeenCalledWith({
         where: {
@@ -111,13 +115,13 @@ describe('TemplatesService', () => {
     });
 
     it('returns the template when found', async () => {
-      const result = await service.findOne('seed-template-receipt');
+      const result = await service.findOne('seed-template-receipt', MERCHANT_ID);
       expect(result).toEqual(LIBRARY_TEMPLATE);
     });
 
     it('throws NotFoundException when the template is missing or out of scope', async () => {
       templateFindFirst.mockResolvedValue(null);
-      await expect(service.findOne('unknown')).rejects.toThrow(NotFoundException);
+      await expect(service.findOne('unknown', MERCHANT_ID)).rejects.toThrow(NotFoundException);
     });
   });
 
@@ -127,7 +131,7 @@ describe('TemplatesService', () => {
     });
 
     it('creates exactly one new row with parentTemplateId/version/isHead set from the parent', async () => {
-      const result = await service.save(PARENT_TEMPLATE.id, VALID_BODY);
+      const result = await service.save(PARENT_TEMPLATE.id, VALID_BODY, MERCHANT_ID);
 
       expect(transactionFn).toHaveBeenCalledTimes(1);
       expect(txTemplateCreate).toHaveBeenCalledTimes(1);
@@ -146,7 +150,7 @@ describe('TemplatesService', () => {
     });
 
     it('reconstructs layoutSchema server-side using the parent skeleton, not anything from the request', async () => {
-      await service.save(PARENT_TEMPLATE.id, VALID_BODY);
+      await service.save(PARENT_TEMPLATE.id, VALID_BODY, MERCHANT_ID);
 
       const createCall = txTemplateCreate.mock.calls[0][0];
       expect(createCall.data.layoutSchema).toEqual({
@@ -157,7 +161,7 @@ describe('TemplatesService', () => {
     });
 
     it('flips the parent isHead to false without archiving it, by default', async () => {
-      await service.save(PARENT_TEMPLATE.id, VALID_BODY);
+      await service.save(PARENT_TEMPLATE.id, VALID_BODY, MERCHANT_ID);
 
       expect(txTemplateUpdateMany).toHaveBeenCalledWith({
         where: { id: PARENT_TEMPLATE.id, isHead: true },
@@ -166,7 +170,7 @@ describe('TemplatesService', () => {
     });
 
     it('archivePrevious: true sets archivedAt on the same parent-flip statement', async () => {
-      await service.save(PARENT_TEMPLATE.id, { ...VALID_BODY, archivePrevious: true });
+      await service.save(PARENT_TEMPLATE.id, { ...VALID_BODY, archivePrevious: true }, MERCHANT_ID);
 
       expect(txTemplateUpdateMany).toHaveBeenCalledWith({
         where: { id: PARENT_TEMPLATE.id, isHead: true },
@@ -175,7 +179,7 @@ describe('TemplatesService', () => {
     });
 
     it('repoints Merchant.defaultTemplateId unconditionally by where-clause match (no separate read)', async () => {
-      await service.save(PARENT_TEMPLATE.id, VALID_BODY);
+      await service.save(PARENT_TEMPLATE.id, VALID_BODY, MERCHANT_ID);
 
       expect(txMerchantUpdateMany).toHaveBeenCalledWith({
         where: { id: PARENT_TEMPLATE.merchantId, defaultTemplateId: PARENT_TEMPLATE.id },
@@ -184,14 +188,14 @@ describe('TemplatesService', () => {
     });
 
     it('rejects a malformed layoutSchema.blocks before opening a transaction — zero writes', async () => {
-      await expect(service.save(PARENT_TEMPLATE.id, { layoutSchema: { blocks: 'not-an-array' as never } })).rejects.toThrow(
+      await expect(service.save(PARENT_TEMPLATE.id, { layoutSchema: { blocks: 'not-an-array' as never } }, MERCHANT_ID)).rejects.toThrow(
         UnprocessableEntityException,
       );
       expect(transactionFn).not.toHaveBeenCalled();
     });
 
     it('rejects a non-boolean archivePrevious before opening a transaction — zero writes', async () => {
-      await expect(service.save(PARENT_TEMPLATE.id, { ...VALID_BODY, archivePrevious: 'yes' as never })).rejects.toThrow(
+      await expect(service.save(PARENT_TEMPLATE.id, { ...VALID_BODY, archivePrevious: 'yes' as never }, MERCHANT_ID)).rejects.toThrow(
         UnprocessableEntityException,
       );
       expect(transactionFn).not.toHaveBeenCalled();
@@ -201,32 +205,32 @@ describe('TemplatesService', () => {
       const noHeader: SaveTemplateBody = {
         layoutSchema: { blocks: [{ id: 'blk_1', type: 'ITEMS', order: 1, props: {}, visible: true, width: 'full' }] },
       };
-      await expect(service.save(PARENT_TEMPLATE.id, noHeader)).rejects.toThrow(UnprocessableEntityException);
+      await expect(service.save(PARENT_TEMPLATE.id, noHeader, MERCHANT_ID)).rejects.toThrow(UnprocessableEntityException);
       expect(transactionFn).not.toHaveBeenCalled();
     });
 
     it('throws NotFoundException when the target template does not exist or is out of scope', async () => {
       templateFindFirst.mockResolvedValue(null);
-      await expect(service.save('unknown', VALID_BODY)).rejects.toThrow(NotFoundException);
+      await expect(service.save('unknown', VALID_BODY, MERCHANT_ID)).rejects.toThrow(NotFoundException);
       expect(transactionFn).not.toHaveBeenCalled();
     });
 
     it('refuses to fork a library preset (merchantId: null) — zero writes', async () => {
       templateFindFirst.mockResolvedValue({ ...PARENT_TEMPLATE, merchantId: null });
-      await expect(service.save(PARENT_TEMPLATE.id, VALID_BODY)).rejects.toThrow(UnprocessableEntityException);
+      await expect(service.save(PARENT_TEMPLATE.id, VALID_BODY, MERCHANT_ID)).rejects.toThrow(UnprocessableEntityException);
       expect(transactionFn).not.toHaveBeenCalled();
     });
 
     it('refuses to fork a non-head (stale) version — zero writes', async () => {
       templateFindFirst.mockResolvedValue({ ...PARENT_TEMPLATE, isHead: false });
-      await expect(service.save(PARENT_TEMPLATE.id, VALID_BODY)).rejects.toThrow(UnprocessableEntityException);
+      await expect(service.save(PARENT_TEMPLATE.id, VALID_BODY, MERCHANT_ID)).rejects.toThrow(UnprocessableEntityException);
       expect(transactionFn).not.toHaveBeenCalled();
     });
 
     it('aborts with ConflictException when isHead already flipped concurrently — no row created', async () => {
       txTemplateUpdateMany.mockResolvedValue({ count: 0 });
 
-      await expect(service.save(PARENT_TEMPLATE.id, VALID_BODY)).rejects.toThrow(ConflictException);
+      await expect(service.save(PARENT_TEMPLATE.id, VALID_BODY, MERCHANT_ID)).rejects.toThrow(ConflictException);
       expect(txTemplateCreate).not.toHaveBeenCalled();
       expect(txMerchantUpdateMany).not.toHaveBeenCalled();
     });
@@ -235,7 +239,7 @@ describe('TemplatesService', () => {
   describe('clone (C-3)', () => {
     it('deep-copies a library preset into a fresh, independent lineage', async () => {
       templateFindFirst.mockResolvedValue(LIBRARY_TEMPLATE);
-      const result = await service.clone(LIBRARY_TEMPLATE.id);
+      const result = await service.clone(LIBRARY_TEMPLATE.id, MERCHANT_ID);
 
       expect(templateCreate).toHaveBeenCalledWith({
         data: expect.objectContaining({
@@ -250,13 +254,13 @@ describe('TemplatesService', () => {
 
     it('throws NotFoundException when the preset is missing or out of scope', async () => {
       templateFindFirst.mockResolvedValue(null);
-      await expect(service.clone('unknown')).rejects.toThrow(NotFoundException);
+      await expect(service.clone('unknown', MERCHANT_ID)).rejects.toThrow(NotFoundException);
       expect(templateCreate).not.toHaveBeenCalled();
     });
 
     it('refuses to clone a merchant-owned template', async () => {
       templateFindFirst.mockResolvedValue(MERCHANT_OWNED_TEMPLATE);
-      await expect(service.clone(MERCHANT_OWNED_TEMPLATE.id)).rejects.toThrow(UnprocessableEntityException);
+      await expect(service.clone(MERCHANT_OWNED_TEMPLATE.id, MERCHANT_ID)).rejects.toThrow(UnprocessableEntityException);
       expect(templateCreate).not.toHaveBeenCalled();
     });
   });
@@ -264,7 +268,7 @@ describe('TemplatesService', () => {
   describe('setDefault (C-3)', () => {
     it('repoints Merchant.defaultTemplateId at the given head template', async () => {
       templateFindFirst.mockResolvedValue(MERCHANT_OWNED_TEMPLATE);
-      await service.setDefault(MERCHANT_OWNED_TEMPLATE.id);
+      await service.setDefault(MERCHANT_OWNED_TEMPLATE.id, MERCHANT_ID);
 
       expect(merchantUpdate).toHaveBeenCalledWith({
         where: { id: 'seed-merchant-demo' },
@@ -274,13 +278,13 @@ describe('TemplatesService', () => {
 
     it('throws NotFoundException when the template is missing or out of scope', async () => {
       templateFindFirst.mockResolvedValue(null);
-      await expect(service.setDefault('unknown')).rejects.toThrow(NotFoundException);
+      await expect(service.setDefault('unknown', MERCHANT_ID)).rejects.toThrow(NotFoundException);
       expect(merchantUpdate).not.toHaveBeenCalled();
     });
 
     it('refuses to set a non-head version as default', async () => {
       templateFindFirst.mockResolvedValue({ ...MERCHANT_OWNED_TEMPLATE, isHead: false });
-      await expect(service.setDefault(MERCHANT_OWNED_TEMPLATE.id)).rejects.toThrow(UnprocessableEntityException);
+      await expect(service.setDefault(MERCHANT_OWNED_TEMPLATE.id, MERCHANT_ID)).rejects.toThrow(UnprocessableEntityException);
       expect(merchantUpdate).not.toHaveBeenCalled();
     });
   });
@@ -290,7 +294,7 @@ describe('TemplatesService', () => {
       templateFindFirst.mockResolvedValue(MERCHANT_OWNED_TEMPLATE);
       merchantFindUnique.mockResolvedValue({ id: 'seed-merchant-demo', defaultTemplateId: 'some-other-template' });
 
-      const result = await service.archive(MERCHANT_OWNED_TEMPLATE.id);
+      const result = await service.archive(MERCHANT_OWNED_TEMPLATE.id, MERCHANT_ID);
 
       expect(templateUpdate).toHaveBeenCalledWith({
         where: { id: MERCHANT_OWNED_TEMPLATE.id },
@@ -303,19 +307,19 @@ describe('TemplatesService', () => {
       templateFindFirst.mockResolvedValue(MERCHANT_OWNED_TEMPLATE);
       merchantFindUnique.mockResolvedValue({ id: 'seed-merchant-demo', defaultTemplateId: MERCHANT_OWNED_TEMPLATE.id });
 
-      await expect(service.archive(MERCHANT_OWNED_TEMPLATE.id)).rejects.toThrow(UnprocessableEntityException);
+      await expect(service.archive(MERCHANT_OWNED_TEMPLATE.id, MERCHANT_ID)).rejects.toThrow(UnprocessableEntityException);
       expect(templateUpdate).not.toHaveBeenCalled();
     });
 
     it('throws NotFoundException when the template is missing, out of scope, or already archived', async () => {
       templateFindFirst.mockResolvedValue(null);
-      await expect(service.archive('unknown')).rejects.toThrow(NotFoundException);
+      await expect(service.archive('unknown', MERCHANT_ID)).rejects.toThrow(NotFoundException);
       expect(templateUpdate).not.toHaveBeenCalled();
     });
 
     it('refuses to archive a non-head version', async () => {
       templateFindFirst.mockResolvedValue({ ...MERCHANT_OWNED_TEMPLATE, isHead: false });
-      await expect(service.archive(MERCHANT_OWNED_TEMPLATE.id)).rejects.toThrow(UnprocessableEntityException);
+      await expect(service.archive(MERCHANT_OWNED_TEMPLATE.id, MERCHANT_ID)).rejects.toThrow(UnprocessableEntityException);
       expect(templateUpdate).not.toHaveBeenCalled();
     });
   });

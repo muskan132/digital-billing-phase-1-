@@ -27,7 +27,7 @@ import { CreateBillDto } from '../src/bills/dto/create-bill.dto';
 
 config({ path: path.join(__dirname, '..', '.env') });
 
-const SEED_MERCHANT_ID = 'seed-merchant-demo';
+const TEST_MERCHANT_ID = 'seed-merchant-demo';
 const SOURCE_PRESET_ID = 'seed-template-retail'; // TAX_INVOICE, library preset — cloned, never forked directly (D-33).
 
 interface LayoutBlock {
@@ -94,15 +94,15 @@ async function main() {
   // ---- Step 1: real C-3 clone — a genuine merchant-owned template to fork against.
   // Presets (merchantId: null) cannot be forked directly (CANNOT_FORK_LIBRARY_PRESET),
   // so this is the same path a real merchant would take before ever editing a template.
-  const cloned = await templatesService.clone(SOURCE_PRESET_ID);
-  if (cloned.merchantId !== SEED_MERCHANT_ID) fail(`clone() produced merchantId=${cloned.merchantId}, expected ${SEED_MERCHANT_ID}`);
+  const cloned = await templatesService.clone(SOURCE_PRESET_ID, TEST_MERCHANT_ID);
+  if (cloned.merchantId !== TEST_MERCHANT_ID) fail(`clone() produced merchantId=${cloned.merchantId}, expected ${TEST_MERCHANT_ID}`);
   console.log(`PASS  clone() — new merchant-owned template ${cloned.id} (version ${cloned.version})`);
 
   // ---- Step 2: real BillsService.createBill — a genuine bill issued against that
   // template, exactly as the public API would produce one.
   const suffix = Date.now().toString();
   const dto = buildDto(cloned.id, suffix);
-  const createResult = await billsService.createBill(dto, SEED_MERCHANT_ID);
+  const createResult = await billsService.createBill(dto, TEST_MERCHANT_ID);
   if (!createResult.created) fail('createBill() reported created:false on a fresh external_transaction_id');
   const identifier = createResult.body.identifier;
   console.log(`PASS  createBill() — real bill ${createResult.body.bill_id}, link ${identifier}`);
@@ -151,7 +151,7 @@ async function main() {
     const doc = headBefore.layoutSchema as unknown as LayoutSchemaV2Doc;
     const edited = edits[i](doc);
 
-    const forked = await templatesService.save(headId, { layoutSchema: { blocks: edited.blocks } });
+    const forked = await templatesService.save(headId, { layoutSchema: { blocks: edited.blocks } }, TEST_MERCHANT_ID);
     lineage.push(forked.id);
     console.log(`PASS  save() #${n} — forked ${headId} -> ${forked.id} (version ${forked.version})`);
 

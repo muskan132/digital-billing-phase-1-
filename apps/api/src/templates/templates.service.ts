@@ -3,12 +3,6 @@ import { Prisma } from '@prisma/client';
 import { BLOCK_MANIFEST, LayoutSchemaV2, validateLayoutSchema } from '@digital-billing/block-manifest';
 import { PrismaService } from '../prisma/prisma.service';
 
-// C-1: the seeded merchant's fixed id (matches apps/api/prisma/seed.ts's
-// MERCHANT_ID and demo.service.ts's hardcoded-seed-id pattern). No auth guard
-// resolves this from a request here — the demo builder has no bearer token —
-// so it's a constant, same as the rest of the demo surface.
-const SEED_MERCHANT_ID = 'seed-merchant-demo';
-
 export interface SaveTemplateBody {
   layoutSchema: {
     blocks: unknown;
@@ -24,13 +18,17 @@ export interface SaveTemplateBody {
 export class TemplatesService {
   constructor(private readonly prisma: PrismaService) {}
 
-  // Library presets (merchantId: null) + the seeded merchant's own templates.
+  // A-4: merchantId arrives as an argument, resolved by the caller's guard
+  // (DemoOnlyGuard today, SessionGuard for /portal later) via MerchantContext
+  // (D-46). This service reads no constant and no environment variable.
+
+  // Library presets (merchantId: null) + the calling merchant's own templates.
   // D-33: archived rows never appear. Head-only per C-1 ("list head, non-archived
   // templates") — the builder's "my templates" list, not the full lineage.
-  async list() {
+  async list(merchantId: string) {
     return this.prisma.template.findMany({
       where: {
-        OR: [{ merchantId: SEED_MERCHANT_ID }, { merchantId: null }],
+        OR: [{ merchantId }, { merchantId: null }],
         isHead: true,
         archivedAt: null,
       },
@@ -41,11 +39,11 @@ export class TemplatesService {
   // Same merchant/library scope as list(), but not restricted to isHead — a
   // fetch-by-id may target a specific lineage entry, not just the current head.
   // Still excludes archived rows (D-33 soft-delete) and out-of-scope merchants.
-  async findOne(id: string) {
+  async findOne(id: string, merchantId: string) {
     const template = await this.prisma.template.findFirst({
       where: {
         id,
-        OR: [{ merchantId: SEED_MERCHANT_ID }, { merchantId: null }],
+        OR: [{ merchantId }, { merchantId: null }],
         archivedAt: null,
       },
     });
@@ -60,7 +58,7 @@ export class TemplatesService {
   // Validate-before-persist (T-6): an invalid document throws before the
   // transaction ever opens, so a 422 leaves zero writes, same discipline as
   // G-1/M-3.
-  async save(id: string, body: SaveTemplateBody) {
+  async save(id: string, body: SaveTemplateBody, merchantId: string) {
     if (typeof body?.layoutSchema !== 'object' || body.layoutSchema === null || !Array.isArray(body.layoutSchema.blocks)) {
       throw new UnprocessableEntityException({ error_code: 'MALFORMED_LAYOUT_SCHEMA', message: 'layoutSchema.blocks must be an array' });
     }
@@ -74,15 +72,15 @@ export class TemplatesService {
     const parent = await this.prisma.template.findFirst({
       where: {
         id,
-        OR: [{ merchantId: SEED_MERCHANT_ID }, { merchantId: null }],
+        OR: [{ merchantId }, { merchantId: null }],
         archivedAt: null,
       },
     });
     if (!parent) {
       throw new NotFoundException();
     }
-    const merchantId = parent.merchantId;
-    if (merchantId === null) {
+    const parentMerchantId = parent.merchantId;
+    if (parentMerchantId === null) {
       // D-33 / TEMPLATE_SYSTEM_v2 §8 rule 7: presets are immutable to merchants —
       // forking one directly (rather than through a deep-copy clone, C-3) would
       // let an edit history attach to a row every merchant shares.
@@ -122,7 +120,7 @@ export class TemplatesService {
 
       const forked = await tx.template.create({
         data: {
-          merchantId,
+          merchantId: parentMerchantId,
           name: parent.name,
           billType: parent.billType,
           skeleton: parent.skeleton,
@@ -136,7 +134,7 @@ export class TemplatesService {
       // Unconditional match-or-no-op — repoints the default only if it
       // actually pointed at the parent, atomically with the flip/archive above.
       await tx.merchant.updateMany({
-        where: { id: merchantId, defaultTemplateId: parent.id },
+        where: { id: parentMerchantId, defaultTemplateId: parent.id },
         data: { defaultTemplateId: forked.id },
       });
 
@@ -150,11 +148,11 @@ export class TemplatesService {
   // merchant template must never trace its history back into shared library
   // rows. Only presets may be cloned; a merchant's own template already has
   // its own lineage and forks via save() (C-2) instead.
-  async clone(id: string) {
+  async clone(id: string, merchantId: string) {
     const preset = await this.prisma.template.findFirst({
       where: {
         id,
-        OR: [{ merchantId: SEED_MERCHANT_ID }, { merchantId: null }],
+        OR: [{ merchantId }, { merchantId: null }],
         archivedAt: null,
       },
     });
@@ -167,7 +165,7 @@ export class TemplatesService {
 
     return this.prisma.template.create({
       data: {
-        merchantId: SEED_MERCHANT_ID,
+        merchantId,
         name: preset.name,
         billType: preset.billType,
         skeleton: preset.skeleton,
@@ -187,11 +185,11 @@ export class TemplatesService {
   // current head — pointing the default at an archived or superseded row
   // would make every subsequent bill resolve a template no longer shown
   // anywhere in the builder.
-  async setDefault(id: string) {
+  async setDefault(id: string, merchantId: string) {
     const template = await this.prisma.template.findFirst({
       where: {
         id,
-        OR: [{ merchantId: SEED_MERCHANT_ID }, { merchantId: null }],
+        OR: [{ merchantId }, { merchantId: null }],
         archivedAt: null,
       },
     });
@@ -203,7 +201,7 @@ export class TemplatesService {
     }
 
     return this.prisma.merchant.update({
-      where: { id: SEED_MERCHANT_ID },
+      where: { id: merchantId },
       data: { defaultTemplateId: template.id },
     });
   }
@@ -215,9 +213,9 @@ export class TemplatesService {
   // preset would remove it from every merchant's list, not just this one's;
   // archiving a non-head row has no visible effect since only the head ever
   // appears in list().
-  async archive(id: string) {
+  async archive(id: string, merchantId: string) {
     const template = await this.prisma.template.findFirst({
-      where: { id, merchantId: SEED_MERCHANT_ID, archivedAt: null },
+      where: { id, merchantId, archivedAt: null },
     });
     if (!template) {
       throw new NotFoundException();
@@ -226,7 +224,7 @@ export class TemplatesService {
       throw new UnprocessableEntityException({ error_code: 'CANNOT_ARCHIVE_NON_HEAD_VERSION' });
     }
 
-    const merchant = await this.prisma.merchant.findUnique({ where: { id: SEED_MERCHANT_ID } });
+    const merchant = await this.prisma.merchant.findUnique({ where: { id: merchantId } });
     if (merchant?.defaultTemplateId === id) {
       throw new UnprocessableEntityException({
         error_code: 'CANNOT_ARCHIVE_DEFAULT_TEMPLATE',
