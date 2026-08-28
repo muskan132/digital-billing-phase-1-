@@ -3,11 +3,15 @@
 // issuance, cookie set/clear. Does NOT build SessionGuard/MerchantContext —
 // that is A-3; this only needs enough session-lookup logic for its own three
 // routes (logout's replay-401 case) to behave correctly.
-import { Controller, Get, Post, Req, Res } from '@nestjs/common';
+import { Controller, Get, Post, Query, Req, Res, UnauthorizedException, UseGuards } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { SessionService } from './session.service';
+import { SessionGuard } from './session.guard';
+import { CurrentMerchantContext, MerchantContext } from './merchant-context';
 import { isEligibleUser } from './eligibility';
 import { parseCookies } from './cookie.util';
+import { deriveCsrfToken } from './csrf.util';
+import { isSafeReturnTo } from './return-to.util';
 import { OidcIdentityProviderAdapter } from './oidc-identity-provider.adapter';
 
 const SESSION_COOKIE = 'session';
@@ -46,6 +50,10 @@ interface FlowCookiePayload {
   state: string;
   nonce: string;
   codeVerifier: string;
+  // W-1: the /portal path that started the login, so callback can send the
+  // user back there instead of always to /portal root. Validated (isSafeReturnTo)
+  // both when written here and again when read in callback().
+  returnTo?: string;
 }
 
 @Controller()
@@ -63,13 +71,14 @@ export class AuthController {
   ) {}
 
   @Get('auth/login')
-  async login(@Res() res: AuthResponse) {
+  async login(@Query('returnTo') returnTo: string | undefined, @Res() res: AuthResponse) {
     const authReq = await this.identityProvider.createAuthorizationRequest();
 
     const payload: FlowCookiePayload = {
       state: authReq.state,
       nonce: authReq.nonce,
       codeVerifier: authReq.codeVerifier,
+      ...(isSafeReturnTo(returnTo) ? { returnTo } : {}),
     };
     res.cookie(FLOW_COOKIE, JSON.stringify(payload), {
       httpOnly: true,
@@ -139,7 +148,41 @@ export class AuthController {
       maxAge: SESSION_COOKIE_MAX_AGE_MS,
     });
 
-    res.redirect(`${process.env.PUBLIC_BILL_BASE_URL ?? 'http://localhost:3000'}/portal`);
+    // W-1: back to the path that started the login, re-validated here since
+    // the flow cookie round-tripped through the browser — never trust it
+    // blindly even though it's HttpOnly. Falls back to /portal root.
+    const target = isSafeReturnTo(flow.returnTo) ? flow.returnTo : '/portal';
+    res.redirect(`${process.env.PUBLIC_BILL_BASE_URL ?? 'http://localhost:3000'}${target}`);
+  }
+
+  // A-5 / D-57: the ONLY way a client ever obtains the CSRF token — never a
+  // cookie. Requires an already-valid session (SessionGuard); called once
+  // after login, cached client-side for the session's lifetime.
+  @Get('portal/csrf-token')
+  @UseGuards(SessionGuard)
+  async csrfToken(@Req() req: AuthRequest) {
+    const cookies = parseCookies(req.headers.cookie);
+    const sessionToken = cookies[SESSION_COOKIE];
+    if (!sessionToken) {
+      // Unreachable in practice — SessionGuard already required a valid
+      // session cookie to reach this handler at all. Fails closed anyway,
+      // never silently derives a token from nothing.
+      throw new UnauthorizedException();
+    }
+    return { token: deriveCsrfToken(sessionToken) };
+  }
+
+  // W-1: the portal shell's own nav data — merchant name and role, sourced
+  // from the session's MerchantContext, never a query param or client-side
+  // state. No business data (bills/templates) — that's H-1/W-2/W-3.
+  @Get('portal/me')
+  @UseGuards(SessionGuard)
+  async me(@CurrentMerchantContext() ctx: MerchantContext) {
+    const merchant = await this.prisma.merchant.findUniqueOrThrow({
+      where: { id: ctx.merchantId },
+      select: { name: true },
+    });
+    return { merchantName: merchant.name, role: ctx.role };
   }
 
   @Post('portal/logout')

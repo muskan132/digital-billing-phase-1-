@@ -517,3 +517,60 @@
     width: 100%;
   }
 }
+
+/* ==================== Portal shell (W-1) ====================
+   Layout/nav chrome only — no business data rendered here. Same tokens as
+   the rest of this file. */
+
+.portal-shell {
+  min-height: 100vh;
+  background: var(--canvas);
+  color: var(--ink);
+}
+
+.portal-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--hairline);
+  background: var(--surface);
+}
+
+.portal-nav-brand {
+  font-weight: 600;
+  font-size: 16px;
+}
+
+.portal-nav-account {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.portal-nav-merchant {
+  font-size: 14px;
+  color: var(--slate);
+}
+
+.portal-logout-button {
+  padding: 8px 16px;
+  background: var(--canvas);
+  color: var(--ink);
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.portal-main {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 24px 16px 48px;
+}
+
+.portal-placeholder {
+  color: var(--slate);
+  font-size: 14px;
+}
