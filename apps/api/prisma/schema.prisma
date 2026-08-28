@@ -215,6 +215,11 @@ model Bill {
   createdAt      DateTime @default(now())
 
   @@unique([merchantId, invoiceNumber])
+  // H-1 / D-58: supports GET /portal/bills's keyset pagination — the
+  // (createdAt, id) tie-break order matches this index's column order
+  // exactly, so the cursor WHERE (merchantId = ? AND (createdAt < ? OR
+  // (createdAt = ? AND id < ?))) is a single index range scan, not a sort.
+  @@index([merchantId, createdAt, id])
 }
 
 model Link {

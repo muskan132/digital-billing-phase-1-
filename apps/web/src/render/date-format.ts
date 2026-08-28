@@ -23,3 +23,22 @@ export function formatCallbackDateTime(raw: string | null | undefined): string |
 
   return `${Number(day)} ${MONTHS[monthIndex]} ${year}, ${hour12}:${minutes} ${period}`;
 }
+
+// H-2: formats an ISO 8601 timestamp (e.g. Bill.createdAt) as UTC, explicitly
+// — never the viewer's local timezone, which would make "same list, same
+// order" depend on where the merchant happens to be sitting. Uses the
+// Date object's own UTC getters, never Number()/parseFloat() on the string.
+export function formatUtcTimestamp(iso: string): string | null {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return null;
+
+  const day = date.getUTCDate();
+  const month = MONTHS[date.getUTCMonth()];
+  const year = date.getUTCFullYear();
+  const hour24 = date.getUTCHours();
+  const minutes = date.getUTCMinutes().toString().padStart(2, '0');
+  const period = hour24 >= 12 ? 'PM' : 'AM';
+  const hour12 = hour24 % 12 === 0 ? 12 : hour24 % 12;
+
+  return `${day} ${month} ${year}, ${hour12}:${minutes} ${period} UTC`;
+}
