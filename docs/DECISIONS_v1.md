@@ -342,3 +342,78 @@ Within a line, the CGST/SGST split is `cgst[i] = (tax[i] + 1n) / 2n` and `sgst[i
 **Failure mode:** both a missing token and a mismatched token return the same `403` with `{ error_code: 'CSRF_TOKEN_INVALID' }` — deliberately not distinguished, so the response can't be used to tell "no token sent" apart from "wrong guess." Comparison is timing-safe (`crypto.timingSafeEqual`), matching `ApiKeyGuard`'s existing precedent.
 **New env var:** `CSRF_SECRET` (`apps/api/.env`/`.env.example`) — a dedicated secret, not reused from `SECRET_KEY` (which authenticates JioPay webhook HMACs, D-2/D-3's concern) — mixing two independent secrets across unrelated trust boundaries means compromising one leaks the other's capability. `.env.example` documents a placeholder value only.
 **Verification:** `csrf.guard.spec.ts` (missing/mismatched token → `403 CSRF_TOKEN_INVALID`; correctly-derived token → passes; `GET` → always exempt; non-`/portal` path → no-op) plus a structural test: a throwaway, undecorated `POST /portal/__test_probe` route on a real bootstrapped Nest app, hit over real HTTP with no token, asserting `403` — proof the global guard protects a route nobody remembered to decorate, not merely that the guard's own logic is correct in isolation.
+### D-58 · Keyset pagination is hand-built (manual OR tie-break), not Prisma's native `cursor`; a new composite index backs it; contact masking for the list DTO is its own function, distinct from log masking
+
+**Decision:** `GET /portal/bills` sorts `createdAt DESC, id DESC` and paginates via an opaque
+base64 cursor encoding the last row's own `{createdAt, id}`. The next page's WHERE is built
+by hand — `createdAt < cursor.createdAt OR (createdAt = cursor.createdAt AND id < cursor.id)`
+— composed through Prisma's query builder (`OR`/`AND`), not raw SQL. A new index,
+`Bill(merchantId, createdAt, id)`, backs it. `PORTAL_BILLS_DEFAULT_LIMIT = 20`,
+`PORTAL_BILLS_MAX_LIMIT = 100` (requests above 100 are rejected with 400, not silently
+clamped). List-DTO contact masking is a new pair of functions,
+`maskMobilePortal()`/`maskEmailPortal()` (`apps/api/src/common/portal-contact-mask.util.ts`),
+matching D-48's literal examples exactly (`98****3210`, `a***@example.com`) and returning
+`null` — not a placeholder string — when contact is absent.
+
+**Reason (pagination mechanism):** Prisma's built-in `cursor:` option is designed around a
+single unique field; it has no way to express the cross-field inequality a real keyset
+tie-break needs when the primary sort column (`createdAt`) isn't itself unique. The
+alternative — sorting by `id` alone, or accepting occasional skip/repeat on a `createdAt` tie
+— was rejected because two bills can share a millisecond-resolution timestamp under load, and
+"never skip or repeat a row across a live page fetch" is this route's actual contract, not
+"never skip or repeat a row unless two bills happen to share a timestamp."
+
+**Reason (masking function):** `mask.util.ts`'s existing `maskMobile()` (used only in log
+lines) keeps the last 2 digits, not the last 4 — a different, more aggressive format than
+D-48's literal example. Reusing it for the portal DTO would silently ship a masking behavior
+the doc doesn't actually describe. Rather than resolve that by editing either the doc or the
+log-masking behavior other code already depends on, this is a new, narrowly-scoped function
+whose only job is matching D-48's contract exactly; `mask.util.ts` is untouched.
+
+**Runner-up (pagination):** offset/`skip`-based pagination. Rejected outright — `SCOPE_v4.md`
+§4 requires keyset explicitly, and offset pagination is exactly what silently skips or repeats
+rows when a new bill is inserted between two page fetches.
+
+**Verification:** `portal-bills.service.spec.ts` (mocked — scoping, filter folding, DTO
+key-set, BigInt→string, cursor→OR translation, validation) plus
+`portal-bills.service.integration.spec.ts` (real Postgres — cross-merchant isolation
+cross-checked against `prisma.bill.count()`, source-filter partitioning, and a real bill
+inserted between two sequential page fetches proven to land exactly once on the correct page).
+### D-59 · SessionGuard's role check read only method-level @Roles(); class-level was silently ignored
+
+**Decision:** SessionGuard.canActivate now resolves required roles via
+`reflector.getAllAndOverride(ROLES_KEY, [context.getHandler(), context.getClass()])` —
+method-level metadata wins when present, class-level is the fallback. Previously it called
+`reflector.get(ROLES_KEY, context.getHandler())`, which only ever sees metadata attached
+directly to the route handler.
+
+**The bug:** `PortalBillsController` (H-1) and `PortalTemplatesController` (W-2) both declared
+`@Roles(MERCHANT_ADMIN, STORE_STAFF)` at the CLASS level. `context.getHandler()` never sees
+class-level metadata, so the role check silently evaluated to "no roles required" on every
+route in both controllers — any authenticated user, any role, passed regardless of the
+decorator. This was not a tenancy leak (merchantId scoping is a separate, correct mechanism)
+but the role gate itself did nothing since A-3 shipped it.
+
+**Why it wasn't caught earlier:** `session.guard.spec.ts`'s existing role tests mocked
+`reflector.get()` directly and asserted the guard's own if/throw logic given a role list —
+they never exercised real NestJS metadata resolution against an actually-decorated class, so
+a broken class-vs-method read was invisible to them. It also never surfaced behaviorally
+because H-1 and W-2 only ever needed one uniform role set (MERCHANT_ADMIN + STORE_STAFF) and
+only MERCHANT_ADMIN is seeded — a no-op gate and a working one produce identical results until
+a route needs a NARROWER role set than its siblings, which is exactly what W-3's builder
+writes (MERCHANT_ADMIN only, vs. reads' MERCHANT_ADMIN + STORE_STAFF) introduced for the first
+time.
+
+**Consequence:** H-1's and W-2's role gates begin actually enforcing as a direct effect of this
+fix — no behavior change was intended or needed there (both already declared the same
+MERCHANT_ADMIN + STORE_STAFF set at the class level, which is still correct), but it is worth
+naming that their read routes go from unenforced to enforced the moment this ships. Confirmed
+via a real-Nest-app structural test (session.guard.spec.ts) that both roles still pass those
+routes unchanged.
+
+**Verification:** two real-HTTP structural tests (real `Reflector`, no mocking of the
+resolution mechanism itself) — one in `session.guard.spec.ts` proving class-level-only routes
+accept both roles and a method-level override wins over the class default; one in
+`portal-templates.controller.spec.ts` proving the concrete case this bug protects:
+STORE_STAFF → 403 on every builder write route, MERCHANT_ADMIN → 200/201 on all of them — the
+exact line A-3's roadmap row named and that had never actually been true until now.

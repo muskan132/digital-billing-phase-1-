@@ -570,9 +570,16 @@
   padding: 24px 16px 48px;
 }
 
-.portal-placeholder {
-  color: var(--slate);
-  font-size: 14px;
+/* W-3 builder width fix: .builder-shell (max-width: 1280px, its own
+   padding) is meant to be the outermost content container, exactly as it
+   is under (main)'s plain <body> wrapper at /demo/templates/:id. Nested
+   inside .portal-main it would otherwise be capped at 960px with doubled
+   padding. Scoped to routes that actually mount the builder — every other
+   /portal page (dashboard, bill list/detail) keeps the 960px cap
+   untouched. */
+.portal-main:has(.builder-shell) {
+  max-width: none;
+  padding: 0;
 }
 
 /* ==================== Portal bill history (H-2) ==================== */
@@ -661,4 +668,209 @@
   font-size: 14px;
   color: var(--ink);
   text-decoration: none;
+}
+
+/* ==================== Portal bill detail (H-3) ==================== */
+
+.portal-bill-detail-back {
+  display: inline-block;
+  margin-bottom: 16px;
+  font-size: 14px;
+  color: var(--slate);
+  text-decoration: none;
+}
+
+.portal-bill-detail-title {
+  font-size: 22px;
+  margin: 0 0 20px;
+}
+
+.portal-bill-detail-subheading {
+  font-size: 16px;
+  margin: 28px 0 12px;
+}
+
+.portal-bill-detail-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 12px 24px;
+  margin: 0;
+  padding: 16px;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+}
+
+.portal-bill-detail-facts dt {
+  font-size: 12px;
+  color: var(--slate);
+  margin: 0 0 2px;
+}
+
+.portal-bill-detail-facts dd {
+  font-size: 14px;
+  margin: 0;
+}
+
+.portal-bill-detail-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.portal-bill-detail-table th,
+.portal-bill-detail-table td {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.portal-bill-detail-table th {
+  color: var(--slate);
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.portal-bill-detail-empty,
+.portal-bill-detail-error {
+  color: var(--slate);
+  font-size: 14px;
+}
+
+.portal-bill-detail-public-link {
+  display: inline-block;
+  margin-top: 28px;
+  color: var(--primary);
+  font-size: 14px;
+  text-decoration: none;
+}
+
+/* ==================== Portal dashboard (W-2) ==================== */
+
+.portal-dashboard-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 24px;
+}
+
+.portal-dashboard-title {
+  font-size: 22px;
+  margin: 0;
+}
+
+.portal-dashboard-create-invoice {
+  padding: 10px 20px;
+  background: var(--primary);
+  color: var(--canvas);
+  border-radius: 8px;
+  font-size: 14px;
+  text-decoration: none;
+}
+
+.portal-dashboard-panel {
+  margin-bottom: 32px;
+  padding: 16px;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+}
+
+.portal-dashboard-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.portal-dashboard-panel-title {
+  font-size: 16px;
+  margin: 0 0 12px;
+}
+
+.portal-dashboard-view-all {
+  font-size: 13px;
+  color: var(--slate);
+  text-decoration: none;
+}
+
+.portal-dashboard-empty,
+.portal-dashboard-error {
+  color: var(--slate);
+  font-size: 14px;
+  margin: 0;
+}
+
+.portal-dashboard-template-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.portal-dashboard-template-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.portal-dashboard-template-link {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink);
+  font-size: 14px;
+  text-decoration: none;
+}
+
+.portal-dashboard-badge {
+  padding: 2px 8px;
+  background: var(--primary);
+  color: var(--canvas);
+  border-radius: 999px;
+  font-size: 11px;
+}
+
+.portal-dashboard-template-meta {
+  font-size: 12px;
+  color: var(--slate);
+}
+
+.portal-dashboard-bills-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.portal-dashboard-bills-table th,
+.portal-dashboard-bills-table td {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.portal-dashboard-bills-table th {
+  color: var(--slate);
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.portal-dashboard-bills-table a {
+  color: var(--ink);
+  text-decoration: none;
+}
+
+/* ==================== Portal builder (W-3) ==================== */
+/* .builder-shell/.builder-header/.builder-undo-redo/.edit-bill-layout/
+   .edit-bill-preview are reused as-is from the Builder UI section above —
+   same components, same chrome, no new rules needed for them. */
+
+.portal-builder-save-error,
+.portal-builder-load-error {
+  color: var(--semantic-error);
+  font-size: 14px;
+  margin: 0 0 12px;
 }

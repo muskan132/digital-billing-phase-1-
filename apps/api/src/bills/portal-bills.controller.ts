@@ -3,12 +3,12 @@
 // readable by MERCHANT_ADMIN and STORE_STAFF, same as the roadmap states
 // (rbac.md is referenced there but absent from docs/; D-50's own text is
 // the source of truth used here).
-import { BadRequestException, Controller, Get, Query, UseGuards } from '@nestjs/common';
+import { BadRequestException, Controller, Get, Param, Query, UseGuards } from '@nestjs/common';
 import { BillType, OrderSource, UserRole } from '@prisma/client';
 import { SessionGuard } from '../auth/session.guard';
 import { Roles } from '../auth/roles.decorator';
 import { CurrentMerchantContext, MerchantContext } from '../auth/merchant-context';
-import { PortalBillListResult, PortalBillsService } from './portal-bills.service';
+import { PortalBillDetailDto, PortalBillListResult, PortalBillsService } from './portal-bills.service';
 
 interface ListBillsQuery {
   cursor?: string;
@@ -71,5 +71,12 @@ export class PortalBillsController {
       cursor: query.cursor,
       limit: parseLimit(query.limit),
     });
+  }
+
+  // H-3 / D-47: another merchant's :id (or a nonexistent one) -> 404, never
+  // 403 — see PortalBillsService.findOne's own comment for the mechanism.
+  @Get(':id')
+  async detail(@Param('id') id: string, @CurrentMerchantContext() ctx: MerchantContext): Promise<PortalBillDetailDto> {
+    return this.portalBillsService.findOne(ctx.merchantId, id);
   }
 }

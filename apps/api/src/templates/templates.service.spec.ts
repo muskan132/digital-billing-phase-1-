@@ -323,4 +323,22 @@ describe('TemplatesService', () => {
       expect(templateUpdate).not.toHaveBeenCalled();
     });
   });
+
+  describe('getDefaultTemplateId (W-2)', () => {
+    it("returns the merchant's stored defaultTemplateId", async () => {
+      merchantFindUnique.mockResolvedValue({ defaultTemplateId: 'tpl-parent' });
+      await expect(service.getDefaultTemplateId(MERCHANT_ID)).resolves.toBe('tpl-parent');
+      expect(merchantFindUnique).toHaveBeenCalledWith({ where: { id: MERCHANT_ID }, select: { defaultTemplateId: true } });
+    });
+
+    it('returns null when the merchant has no default set', async () => {
+      merchantFindUnique.mockResolvedValue({ defaultTemplateId: null });
+      await expect(service.getDefaultTemplateId(MERCHANT_ID)).resolves.toBeNull();
+    });
+
+    it('returns null (not a crash) if the merchant row is somehow missing', async () => {
+      merchantFindUnique.mockResolvedValue(null);
+      await expect(service.getDefaultTemplateId(MERCHANT_ID)).resolves.toBeNull();
+    });
+  });
 });

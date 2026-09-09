@@ -2,7 +2,7 @@
 // cookie, loads the session (SessionService, A-2 — not reimplemented here),
 // re-checks eligibility (isEligibleUser, A-2 — the SAME function login uses,
 // per D-45), and attaches MerchantContext (D-46). Role gate per D-50, read
-// from @Roles(...) route metadata — no route declares one yet.
+// from @Roles(...) route metadata — method-level OR class-level (D-59).
 import { CanActivate, ExecutionContext, ForbiddenException, Injectable, UnauthorizedException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { SessionService } from './session.service';
@@ -67,7 +67,13 @@ export class SessionGuard implements CanActivate {
       role: session.user.role,
     };
 
-    const requiredRoles = this.reflector.get<UserRole[] | undefined>(ROLES_KEY, context.getHandler());
+    // D-59: method-level @Roles() overrides class-level; class-level is the
+    // fallback when a route declares none of its own. A plain .get(handler)
+    // never sees class-level metadata at all — that was the bug D-59 fixes.
+    const requiredRoles = this.reflector.getAllAndOverride<UserRole[] | undefined>(ROLES_KEY, [
+      context.getHandler(),
+      context.getClass(),
+    ]);
     if (requiredRoles && requiredRoles.length > 0 && !requiredRoles.includes(session.user.role)) {
       // Deliberately no clearCookie here — the session itself is still
       // valid, this user simply lacks the role for this one route. Thrown

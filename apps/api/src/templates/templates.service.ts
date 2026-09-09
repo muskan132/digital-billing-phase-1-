@@ -36,6 +36,14 @@ export class TemplatesService {
     });
   }
 
+  // W-2: read-only lookup of the merchant's own stored default — no decision
+  // logic here, just the same field setDefault()/archive() already write/read
+  // elsewhere, exposed for the dashboard's "Create invoice" entry point.
+  async getDefaultTemplateId(merchantId: string): Promise<string | null> {
+    const merchant = await this.prisma.merchant.findUnique({ where: { id: merchantId }, select: { defaultTemplateId: true } });
+    return merchant?.defaultTemplateId ?? null;
+  }
+
   // Same merchant/library scope as list(), but not restricted to isHead — a
   // fetch-by-id may target a specific lineage entry, not just the current head.
   // Still excludes archived rows (D-33 soft-delete) and out-of-scope merchants.
