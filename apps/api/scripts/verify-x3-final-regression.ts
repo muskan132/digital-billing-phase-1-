@@ -168,6 +168,12 @@ function buildBillDto(templateId: string, suffix: string): CreateBillDto {
 async function main() {
   console.log('\n=== X-3: final regression — full cross-merchant probe + portal-forked immutability ===\n');
 
+  // S-11 (D-63 / ROADMAP_v5 S-11 verify): a successful run must leave the
+  // Template row count exactly where it started — cleanupMerchant() removes
+  // every lineage this script clones or HTTP-forks. Asserted in the outer
+  // `finally` after both teardowns.
+  const templateCountBefore = await prisma.template.count();
+
   console.log('Setting up merchant A and merchant B, each with their own template + bill...');
   const merchantA = await createScratchSession();
   const merchantB = await createScratchSession();
@@ -370,6 +376,19 @@ async function main() {
   } finally {
     await cleanupMerchant(merchantA);
     await cleanupMerchant(merchantB);
+
+    // S-11 (D-63): every scratch lineage this run created must be gone.
+    const templateCountAfter = await prisma.template.count();
+    if (templateCountAfter !== templateCountBefore) {
+      console.error(
+        `\n=== X-3 FINDING ===\nTemplate row count changed across this run: ${templateCountBefore} -> ${templateCountAfter} — ` +
+          'a scratch lineage leaked past cleanupMerchant()\n===================\n',
+      );
+      process.exitCode = 1;
+    } else {
+      console.log(`PASS  Template row count unchanged across the run (${templateCountBefore})`);
+    }
+
     await prisma.$disconnect();
     await prismaService.$disconnect();
   }

@@ -23,6 +23,33 @@ function defaultColumnFor(billType: BillType): 'defaultReceiptTemplateId' | 'def
   return billType === BillType.TAX_INVOICE ? 'defaultTaxInvoiceTemplateId' : 'defaultReceiptTemplateId';
 }
 
+// S-11 (D-63): matches a P2002 ONLY when the violated constraint is the partial
+// unique index Template(merchantId, name) WHERE isHead = true — i.e. the
+// merchant already has a live head template by this name. Deliberately narrow,
+// same discipline as bills.service.ts's isInvoiceNumberConflict: never relabel
+// some other unique constraint that could P2002 out of the same write. Today
+// `Template` has no other unique constraint, but the guard is written to stay
+// correct if one is ever added.
+//
+// The friendly 409 is the interim answer until F-2 folds clone() into Save As
+// and F-1's allocator suffixes a taken name to `(1)`/`(2)`/`(n)` (D-63). Until
+// then, a merchant who clones the same starter twice gets a named error, not a
+// raw 500.
+function isTemplateNameConflict(err: unknown): boolean {
+  if (!(err instanceof Prisma.PrismaClientKnownRequestError) || err.code !== 'P2002') {
+    return false;
+  }
+  const target = err.meta?.target;
+  const fields = Array.isArray(target) ? target.map(String) : typeof target === 'string' ? [target] : [];
+  const joined = fields.join('|');
+  return /merchantId/i.test(joined) && /name/i.test(joined);
+}
+
+const TEMPLATE_NAME_TAKEN = {
+  error_code: 'TEMPLATE_NAME_TAKEN',
+  message: 'A template with this name already exists for this merchant. Choose a different name.',
+};
+
 @Injectable()
 export class TemplatesService {
   constructor(private readonly prisma: PrismaService) {}
@@ -126,44 +153,54 @@ export class TemplatesService {
       throw new UnprocessableEntityException({ error_code: 'INVALID_LAYOUT_SCHEMA', issues });
     }
 
-    return this.prisma.$transaction(async (tx) => {
-      // Concurrency guard: if isHead flipped since the read above (a
-      // concurrent save/archive), this matches zero rows — abort rather than
-      // create a second head on top of one already forked.
-      const flipped = await tx.template.updateMany({
-        where: { id: parent.id, isHead: true },
-        data: { isHead: false, ...(archivePrevious ? { archivedAt: new Date() } : {}) },
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        // Concurrency guard: if isHead flipped since the read above (a
+        // concurrent save/archive), this matches zero rows — abort rather than
+        // create a second head on top of one already forked.
+        const flipped = await tx.template.updateMany({
+          where: { id: parent.id, isHead: true },
+          data: { isHead: false, ...(archivePrevious ? { archivedAt: new Date() } : {}) },
+        });
+        if (flipped.count !== 1) {
+          throw new ConflictException({ error_code: 'TEMPLATE_HEAD_CHANGED' });
+        }
+
+        const forked = await tx.template.create({
+          data: {
+            merchantId: parentMerchantId,
+            name: parent.name,
+            billType: parent.billType,
+            skeleton: parent.skeleton,
+            layoutSchema: doc as unknown as Prisma.InputJsonValue,
+            version: parent.version + 1,
+            parentTemplateId: parent.id,
+            isHead: true,
+          },
+        });
+
+        // Unconditional match-or-no-op — repoints the default only if it
+        // actually pointed at the parent, atomically with the flip/archive above.
+        // S-10/D-60: dispatched to the pointer matching the parent's own
+        // billType, so forking a TAX_INVOICE template can never repoint the
+        // RECEIPT pointer the callback path trusts, or vice versa.
+        const defaultColumn = defaultColumnFor(parent.billType);
+        await tx.merchant.updateMany({
+          where: { id: parentMerchantId, [defaultColumn]: parent.id },
+          data: { [defaultColumn]: forked.id },
+        });
+
+        return forked;
       });
-      if (flipped.count !== 1) {
-        throw new ConflictException({ error_code: 'TEMPLATE_HEAD_CHANGED' });
+    } catch (err) {
+      // S-11 (D-63): the merchant already has a live head template by this name
+      // in a DIFFERENT lineage (today only reachable by cloning the same starter
+      // twice — F-2 removes that path). Surface a named 409, not a raw P2002/500.
+      if (isTemplateNameConflict(err)) {
+        throw new ConflictException(TEMPLATE_NAME_TAKEN);
       }
-
-      const forked = await tx.template.create({
-        data: {
-          merchantId: parentMerchantId,
-          name: parent.name,
-          billType: parent.billType,
-          skeleton: parent.skeleton,
-          layoutSchema: doc as unknown as Prisma.InputJsonValue,
-          version: parent.version + 1,
-          parentTemplateId: parent.id,
-          isHead: true,
-        },
-      });
-
-      // Unconditional match-or-no-op — repoints the default only if it
-      // actually pointed at the parent, atomically with the flip/archive above.
-      // S-10/D-60: dispatched to the pointer matching the parent's own
-      // billType, so forking a TAX_INVOICE template can never repoint the
-      // RECEIPT pointer the callback path trusts, or vice versa.
-      const defaultColumn = defaultColumnFor(parent.billType);
-      await tx.merchant.updateMany({
-        where: { id: parentMerchantId, [defaultColumn]: parent.id },
-        data: { [defaultColumn]: forked.id },
-      });
-
-      return forked;
-    });
+      throw err;
+    }
   }
 
   // C-3: clone-from-library — a genuine deep copy, never a reference (D-33 /
@@ -187,22 +224,33 @@ export class TemplatesService {
       throw new UnprocessableEntityException({ error_code: 'CANNOT_CLONE_MERCHANT_TEMPLATE' });
     }
 
-    return this.prisma.template.create({
-      data: {
-        merchantId,
-        name: preset.name,
-        billType: preset.billType,
-        skeleton: preset.skeleton,
-        // A fresh Prisma-fetched JSON value — copying it into a new row's
-        // column is already an independent Postgres jsonb value, not a
-        // reference of any kind. No further serialization needed for the
-        // "deep copy" guarantee.
-        layoutSchema: preset.layoutSchema as Prisma.InputJsonValue,
-        version: 1,
-        parentTemplateId: null,
-        isHead: true,
-      },
-    });
+    try {
+      return await this.prisma.template.create({
+        data: {
+          merchantId,
+          name: preset.name,
+          billType: preset.billType,
+          skeleton: preset.skeleton,
+          // A fresh Prisma-fetched JSON value — copying it into a new row's
+          // column is already an independent Postgres jsonb value, not a
+          // reference of any kind. No further serialization needed for the
+          // "deep copy" guarantee.
+          layoutSchema: preset.layoutSchema as Prisma.InputJsonValue,
+          version: 1,
+          parentTemplateId: null,
+          isHead: true,
+        },
+      });
+    } catch (err) {
+      // S-11 (D-63): the merchant has already cloned this starter — a second
+      // copy would be a duplicate live head name, which the partial unique
+      // index now rejects. Named 409 rather than a raw P2002/500. F-2 folds
+      // clone() into Save As, where F-1's allocator suffixes to `(1)` instead.
+      if (isTemplateNameConflict(err)) {
+        throw new ConflictException(TEMPLATE_NAME_TAKEN);
+      }
+      throw err;
+    }
   }
 
   // C-3: set-default. Target must be within read-scope (C-1) and a live,

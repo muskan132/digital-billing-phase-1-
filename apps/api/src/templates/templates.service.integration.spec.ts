@@ -9,8 +9,8 @@
 // split H-1 established — portal-templates.controller.spec.ts (mocked +
 // real-HTTP role-gate structural test) covers scoping/DTO/role wiring;
 // this file is real Postgres only.
-import { NotFoundException, UnprocessableEntityException } from '@nestjs/common';
-import { PrismaClient } from '@prisma/client';
+import { ConflictException, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
+import { Prisma, PrismaClient } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { TemplatesService } from './templates.service';
 
@@ -213,3 +213,137 @@ describe('/demo/templates non-interference (real DB, W-3 / D-49) — same standa
     await cleanupMerchant(merchant);
   });
 });
+
+// S-11 (D-63): the partial unique index Template(merchantId, name) WHERE
+// isHead = true. Real Postgres only — a mocked PrismaService cannot prove the
+// DB itself does the rejecting.
+describe('S-11 / D-63: partial unique index on (merchantId, name) WHERE isHead = true (real DB)', () => {
+  let merchant: ScratchMerchant;
+  let presetId: string;
+
+  async function rawInsertTemplate(opts: { id: string; merchantId: string | null; name: string; isHead: boolean }) {
+    return prisma.$executeRaw`
+      INSERT INTO "Template" ("id", "merchantId", "name", "billType", "layoutSchema", "isHead", "updatedAt")
+      VALUES (${opts.id}, ${opts.merchantId}, ${opts.name}, ${'RECEIPT'}::"BillType", ${'{}'}::jsonb, ${opts.isHead}, now())
+    `;
+  }
+
+  beforeAll(async () => {
+    merchant = await createScratchMerchant();
+    const preset = await prisma.template.create({
+      data: {
+        id: uniqueId('preset'),
+        merchantId: null,
+        name: 'S-11 itest starter',
+        billType: 'RECEIPT',
+        layoutSchema: { schemaVersion: 2, skeleton: 'MINIMALIST', blocks: [] },
+        isHead: true,
+      },
+    });
+    presetId = preset.id;
+  });
+
+  afterAll(async () => {
+    await cleanupMerchant(merchant);
+    await prisma.template.deleteMany({ where: { id: presetId } });
+    await prisma.template.deleteMany({ where: { name: { in: ['S-11 itest shared starter name', 'S-11 itest head name'] } } });
+  });
+
+  it('a direct INSERT of a second isHead=true row with an existing (merchantId, name) is rejected BY POSTGRES (P2002), not by app code', async () => {
+    const firstId = uniqueId('tpl');
+    await createOwnTemplateWithName(merchant, 'S-11 itest head name', true, firstId);
+
+    const err = await rawInsertTemplate({
+      id: uniqueId('tpl'),
+      merchantId: merchant.merchantId,
+      name: 'S-11 itest head name',
+      isHead: true,
+    }).catch((e: unknown) => e);
+
+    // The rejection is the database's own unique-violation. A raw INSERT
+    // bypasses Prisma's ORM layer, so it surfaces as P2010 ("raw query failed")
+    // carrying Postgres's SQLSTATE 23505 (unique_violation) for the
+    // (merchantId, name) key — no service or NestException layer is involved.
+    expect(err).toBeInstanceOf(Prisma.PrismaClientKnownRequestError);
+    const e = err as Prisma.PrismaClientKnownRequestError;
+    expect(e.code).toBe('P2010');
+    const meta = (e.meta ?? {}) as { code?: string; message?: string };
+    expect(meta.code).toBe('23505');
+    expect(meta.message).toContain('merchantId');
+    expect(meta.message).toContain('already exists');
+  });
+
+  it('the same INSERT with isHead=false succeeds — superseded versions keep their names harmlessly (D-63)', async () => {
+    await expect(
+      rawInsertTemplate({
+        id: uniqueId('tpl'),
+        merchantId: merchant.merchantId,
+        name: 'S-11 itest head name',
+        isHead: false,
+      }),
+    ).resolves.toBe(1);
+  });
+
+  it('two merchantId=NULL (starter) rows may share a name — Postgres ignores NULLs in the unique index (D-63)', async () => {
+    await expect(
+      rawInsertTemplate({ id: uniqueId('tpl'), merchantId: null, name: 'S-11 itest shared starter name', isHead: true }),
+    ).resolves.toBe(1);
+    await expect(
+      rawInsertTemplate({ id: uniqueId('tpl'), merchantId: null, name: 'S-11 itest shared starter name', isHead: true }),
+    ).resolves.toBe(1);
+  });
+
+  it('clone() twice on the same starter by the same merchant → first succeeds, second is a named 409 TEMPLATE_NAME_TAKEN (Option B), not a raw 500', async () => {
+    const first = await service.clone(presetId, merchant.merchantId);
+    expect(first.merchantId).toBe(merchant.merchantId);
+    expect(first.name).toBe('S-11 itest starter');
+
+    const err = await service.clone(presetId, merchant.merchantId).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ConflictException);
+    expect((err as ConflictException).getResponse()).toMatchObject({ error_code: 'TEMPLATE_NAME_TAKEN' });
+
+    // The failed second clone wrote nothing.
+    const clonesOfName = await prisma.template.count({
+      where: { merchantId: merchant.merchantId, name: 'S-11 itest starter' },
+    });
+    expect(clonesOfName).toBe(1);
+  });
+
+  it('save() on a normal lineage is unaffected — the fork flips the parent out of the index first, so name reuse within a lineage never trips it (D-63)', async () => {
+    const parent = await createOwnTemplateWithName(merchant, 'S-11 itest lineage', true, uniqueId('tpl'));
+    const forked = await service.save(
+      parent.id,
+      {
+        layoutSchema: {
+          blocks: [
+            { id: 'blk_1', type: 'HEADER', order: 1, props: {}, visible: true, width: 'full' },
+            { id: 'blk_2', type: 'ITEMS', order: 2, props: {}, visible: true, width: 'full' },
+          ],
+        },
+      },
+      merchant.merchantId,
+    );
+    expect(forked.name).toBe('S-11 itest lineage');
+    expect(forked.isHead).toBe(true);
+    const parentRow = await prisma.template.findUniqueOrThrow({ where: { id: parent.id } });
+    expect(parentRow.isHead).toBe(false);
+    // Exactly one live head by this name.
+    const liveHeads = await prisma.template.count({
+      where: { merchantId: merchant.merchantId, name: 'S-11 itest lineage', isHead: true },
+    });
+    expect(liveHeads).toBe(1);
+  });
+});
+
+async function createOwnTemplateWithName(merchant: ScratchMerchant, name: string, isHead: boolean, id: string) {
+  return prisma.template.create({
+    data: {
+      id,
+      merchantId: merchant.merchantId,
+      name,
+      billType: 'RECEIPT',
+      layoutSchema: { schemaVersion: 2, skeleton: 'MINIMALIST', blocks: [] },
+      isHead,
+    },
+  });
+}

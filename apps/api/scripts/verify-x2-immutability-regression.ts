@@ -105,6 +105,11 @@ async function main() {
 
   console.log('\n=== verify-x2-immutability-regression ===\n');
 
+  // S-11 (D-63 / ROADMAP_v5 S-11 verify): re-running this script must leave the
+  // Template row count exactly where it started — every lineage it forks is
+  // cleaned in the `finally` below. Captured here, asserted after cleanup.
+  const templateCountBefore = await prisma.template.count();
+
   // ---- Step 1: real C-3 clone — a genuine merchant-owned template to fork against.
   // Presets (merchantId: null) cannot be forked directly (CANNOT_FORK_LIBRARY_PRESET),
   // so this is the same path a real merchant would take before ever editing a template.
@@ -229,6 +234,18 @@ async function main() {
   }
   console.log('PASS  final resolve() — rendered blocks match the original, unedited layout\n');
   }
+
+  // S-11 (D-63): the cleanup in the `finally` above must have removed every
+  // scratch row this run created — a leaked lineage would also be a latent
+  // duplicate-head-name risk for the S-11 partial unique index.
+  const templateCountAfter = await prisma.template.count();
+  if (templateCountAfter !== templateCountBefore) {
+    fail(
+      `Template row count changed across this run: ${templateCountBefore} -> ${templateCountAfter} — ` +
+        'scratch data leaked, the cleanup in `finally` is incomplete',
+    );
+  }
+  console.log(`PASS  Template row count unchanged across the run (${templateCountBefore})`);
 
   console.log(`PASS — all checks passed. Bill ${createResult.body.bill_id} / link ${identifier} rendered its original layout through 3 real fork-on-write saves.\n`);
 

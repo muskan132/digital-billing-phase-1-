@@ -1,0 +1,32 @@
+-- S-11 (D-63): no two LIVE, current-head templates in one merchant's list may
+-- share a name. Superseded versions (isHead = false) keep their names
+-- harmlessly; archived rows keep isHead = true so their names stay RESERVED
+-- (D-65).
+--
+-- Hand-written SQL, same precedent as S-10's RENAME COLUMN: Prisma (v6) cannot
+-- express a partial / filtered unique index declaratively, so schema.prisma is
+-- deliberately NOT updated for this and the index will not round-trip through a
+-- future `prisma migrate dev` regeneration. No later v5 task runs `migrate dev`;
+-- a Phase-6 schema change that does must re-add this index (or Prisma will drop
+-- it as "not in schema"). Flagged here so that is a decision, not a surprise.
+--
+-- A plain @@unique([merchantId, name]) is NOT equivalent and would break every
+-- save on the first fork: save() creates the forked row carrying the parent's
+-- name while the parent still exists (D-63's "trap"). The WHERE isHead = true
+-- clause is load-bearing — save() flips the parent's isHead to false BEFORE
+-- inserting the fork, inside one transaction, so the parent has already left
+-- the index's scope at insert time (D-63).
+--
+-- merchantId NULL: Postgres treats NULL as distinct in a unique index by
+-- default (no NULLS NOT DISTINCT clause), so the six merchantId = NULL starter
+-- rows are outside the constraint entirely and may share names with any
+-- merchant's templates (D-63).
+--
+-- Precondition (D-63 / ROADMAP_v5 S-11): the roadmap names "28 rows accumulated
+-- from repeated verify:x2/verify:x3 runs" with possible duplicate head names.
+-- That is stale — verify:x2 and verify:x3 already clean their lineages in a
+-- `finally` (a prior session), and the table holds only the 6 seeded starters
+-- at this migration. Index creation therefore has zero conflicts to resolve.
+CREATE UNIQUE INDEX "Template_merchantId_name_head_key"
+  ON "Template" ("merchantId", "name")
+  WHERE "isHead" = true;
