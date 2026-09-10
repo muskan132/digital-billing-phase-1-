@@ -65,7 +65,7 @@ describe('PortalTemplatesController — builder routes delegate to TemplatesServ
     const service = {
       findOne: jest.fn().mockResolvedValue({ id: 'tpl-1' }),
       save: jest.fn().mockResolvedValue({ id: 'tpl-1-v2' }),
-      clone: jest.fn().mockResolvedValue({ id: 'tpl-clone' }),
+      saveAs: jest.fn().mockResolvedValue({ id: 'tpl-saved-as' }),
       setDefault: jest.fn().mockResolvedValue({ id: 'merchant-A' }),
       archive: jest.fn().mockResolvedValue({ id: 'tpl-1' }),
       ...overrides,
@@ -86,10 +86,11 @@ describe('PortalTemplatesController — builder routes delegate to TemplatesServ
     expect(service.save).toHaveBeenCalledWith('tpl-1', body, 'merchant-A');
   });
 
-  it('clone(id, merchantId)', async () => {
+  it('saveAs(id, body, merchantId)', async () => {
     const { controller, service } = makeController();
-    await controller.clone('tpl-preset', CTX);
-    expect(service.clone).toHaveBeenCalledWith('tpl-preset', 'merchant-A');
+    const body = { name: 'Copy', layoutSchema: { blocks: [] } };
+    await controller.saveAs('tpl-preset', body, CTX);
+    expect(service.saveAs).toHaveBeenCalledWith('tpl-preset', body, 'merchant-A');
   });
 
   it('setDefault(id, merchantId)', async () => {
@@ -121,7 +122,7 @@ const FAKE_TEMPLATES_SERVICE = {
   getDefaultTemplateId: async () => null,
   findOne: async () => ({ id: 'tpl-1' }),
   save: async () => ({ id: 'tpl-1-v2' }),
-  clone: async () => ({ id: 'tpl-clone' }),
+  saveAs: async () => ({ id: 'tpl-saved-as' }),
   setDefault: async () => ({ id: 'merchant-A' }),
   archive: async () => ({ id: 'tpl-1' }),
 };
@@ -161,19 +162,23 @@ describe('PortalTemplatesController (structural — real Nest app, real SessionG
     }
   });
 
-  it('writes (save/clone/set-default/archive) accept MERCHANT_ADMIN...', async () => {
+  it('writes (save/save-as/set-default/archive) accept MERCHANT_ADMIN...', async () => {
     const cookie = 'session=MERCHANT_ADMIN';
     const save = await fetch(`${baseUrl}/portal/templates/tpl-1/save`, {
       method: 'POST',
       headers: { cookie, 'content-type': 'application/json' },
       body: JSON.stringify({ layoutSchema: { blocks: [] } }),
     });
-    const clone = await fetch(`${baseUrl}/portal/templates/tpl-1/clone`, { method: 'POST', headers: { cookie } });
+    const saveAs = await fetch(`${baseUrl}/portal/templates/tpl-1/save-as`, {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Copy', layoutSchema: { blocks: [] } }),
+    });
     const setDefault = await fetch(`${baseUrl}/portal/templates/tpl-1/set-default`, { method: 'POST', headers: { cookie } });
     const archive = await fetch(`${baseUrl}/portal/templates/tpl-1/archive`, { method: 'POST', headers: { cookie } });
 
     expect(save.status).toBe(201);
-    expect(clone.status).toBe(201);
+    expect(saveAs.status).toBe(201);
     expect(setDefault.status).toBe(201);
     expect(archive.status).toBe(201);
   });
@@ -185,12 +190,16 @@ describe('PortalTemplatesController (structural — real Nest app, real SessionG
       headers: { cookie, 'content-type': 'application/json' },
       body: JSON.stringify({ layoutSchema: { blocks: [] } }),
     });
-    const clone = await fetch(`${baseUrl}/portal/templates/tpl-1/clone`, { method: 'POST', headers: { cookie } });
+    const saveAs = await fetch(`${baseUrl}/portal/templates/tpl-1/save-as`, {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Copy', layoutSchema: { blocks: [] } }),
+    });
     const setDefault = await fetch(`${baseUrl}/portal/templates/tpl-1/set-default`, { method: 'POST', headers: { cookie } });
     const archive = await fetch(`${baseUrl}/portal/templates/tpl-1/archive`, { method: 'POST', headers: { cookie } });
 
     expect(save.status).toBe(403);
-    expect(clone.status).toBe(403);
+    expect(saveAs.status).toBe(403);
     expect(setDefault.status).toBe(403);
     expect(archive.status).toBe(403);
   });

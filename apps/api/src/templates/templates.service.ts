@@ -20,6 +20,17 @@ export interface SaveTemplateBody {
   name?: string;
 }
 
+// F-2 (D-62): Save As — `name` is REQUIRED (unlike save()'s optional rename)
+// and `layoutSchema` is the EDITED document to persist into a brand-new lineage.
+// No `archivePrevious`: Save As never touches the source.
+export interface SaveAsBody {
+  name: string;
+  layoutSchema: {
+    blocks: unknown;
+    theme?: unknown;
+  };
+}
+
 // F-1 (D-63): "retry, not count-then-insert". allocateName's probe and the
 // forked-row insert are not atomic, so a concurrent save can take the name in
 // between — caught as P2002 and retried with a fresh allocation. Bounded so a
@@ -47,10 +58,9 @@ function defaultColumnFor(billType: BillType): 'defaultReceiptTemplateId' | 'def
 // `Template` has no other unique constraint, but the guard is written to stay
 // correct if one is ever added.
 //
-// The friendly 409 is the interim answer until F-2 folds clone() into Save As
-// and F-1's allocator suffixes a taken name to `(1)`/`(2)`/`(n)` (D-63). Until
-// then, a merchant who clones the same starter twice gets a named error, not a
-// raw 500.
+// save() with an explicit `name` and saveAs() both retry through F-1's
+// allocator on this; only a save() WITHOUT a name (which would loop retrying
+// the parent's own name) surfaces the bare 409 (D-63).
 function isTemplateNameConflict(err: unknown): boolean {
   if (!(err instanceof Prisma.PrismaClientKnownRequestError) || err.code !== 'P2002') {
     return false;
@@ -251,15 +261,24 @@ export class TemplatesService {
   // `<name> (1)`, `(2)`, ... Archived rows keep isHead = true (D-65), so a name
   // reserved by an archived template counts as taken.
   //
-  // Called INSIDE save()'s transaction with the `tx` client, AFTER the parent's
-  // isHead has been flipped — see the call site. Not atomic with the caller's
-  // insert on its own: save()'s bounded P2002 retry is what closes the window
-  // between the probe here and the create (D-63: "retry, not count-then-
-  // insert"). F-2 (Save As) and F-5 (restore) reuse this method.
-  private async allocateName(tx: Prisma.TransactionClient, merchantId: string, desiredName: string): Promise<string> {
+  // save() calls it with the `tx` client INSIDE its transaction, AFTER the
+  // parent's isHead flip (so renaming a lineage to its own current name
+  // resolves to that name). saveAs() calls it with the plain client — there is
+  // no parent flip, and the source is either a starter (merchantId: null,
+  // invisible to the index) or the merchant's own row whose name legitimately
+  // counts as taken.
+  //
+  // Not atomic with the caller's insert: the caller's bounded P2002 retry
+  // closes the window between the probe here and the create (D-63: "retry, not
+  // count-then-insert"). F-5 (restore) will reuse this too.
+  private async allocateName(
+    client: PrismaService | Prisma.TransactionClient,
+    merchantId: string,
+    desiredName: string,
+  ): Promise<string> {
     for (let n = 0; n <= MAX_NAME_SUFFIX; n++) {
       const candidate = n === 0 ? desiredName : `${desiredName} (${n})`;
-      const taken = await tx.template.findFirst({
+      const taken = await client.template.findFirst({
         where: { merchantId, name: candidate, isHead: true },
         select: { id: true },
       });
@@ -273,54 +292,91 @@ export class TemplatesService {
     });
   }
 
-  // C-3: clone-from-library — a genuine deep copy, never a reference (D-33 /
-  // TEMPLATE_SYSTEM_v2 §8 rule 7). The clone gets its OWN fresh lineage
-  // (parentTemplateId: null, version: 1), not a fork of the preset's — a
-  // merchant template must never trace its history back into shared library
-  // rows. Only presets may be cloned; a merchant's own template already has
-  // its own lineage and forks via save() (C-2) instead.
-  async clone(id: string, merchantId: string) {
-    const preset = await this.prisma.template.findFirst({
+  // F-2 (D-62): Save As — a clean-break copy into a NEW lineage. Replaces C-3's
+  // clone(): it works identically from a starter (merchantId: null) and from
+  // the merchant's own template (head or not — the source is only READ, for
+  // skeleton/billType), so clone()'s CANNOT_CLONE_MERCHANT_TEMPLATE refusal is
+  // gone. It performs exactly one of D-32's four effects: writing one new row.
+  // It does NOT flip the source's isHead and does NOT repoint any default. The
+  // EDITED document from the body is persisted, never the source's stored one,
+  // and no provenance link is recorded (parentTemplateId: null). `name` is
+  // required and runs through F-1's allocator (D-63) — suffixed to `(1)` if the
+  // merchant already holds it.
+  async saveAs(id: string, body: SaveAsBody, merchantId: string) {
+    if (typeof body?.layoutSchema !== 'object' || body.layoutSchema === null || !Array.isArray(body.layoutSchema.blocks)) {
+      throw new UnprocessableEntityException({ error_code: 'MALFORMED_LAYOUT_SCHEMA', message: 'layoutSchema.blocks must be an array' });
+    }
+    if (typeof body?.name !== 'string' || body.name.trim().length === 0) {
+      throw new UnprocessableEntityException({ error_code: 'MALFORMED_REQUEST', message: 'name is required and must be a non-empty string' });
+    }
+    const desiredName = body.name.trim();
+
+    // Same merchant/library read-scope as findOne — a starter, or the
+    // merchant's own template; anyone else's id (or a nonexistent one) is a 404
+    // (D-47). Not restricted to isHead (Q4): Save As only reads the source.
+    const source = await this.prisma.template.findFirst({
       where: {
         id,
         OR: [{ merchantId }, { merchantId: null }],
         archivedAt: null,
       },
     });
-    if (!preset) {
+    if (!source) {
       throw new NotFoundException();
     }
-    if (preset.merchantId !== null) {
-      throw new UnprocessableEntityException({ error_code: 'CANNOT_CLONE_MERCHANT_TEMPLATE' });
+
+    // Reconstructed server-side, never trusting the client's schemaVersion/
+    // skeleton — only blocks/theme are client-controlled (D-62). skeleton and
+    // billType come from the source.
+    const doc: LayoutSchemaV2 = {
+      schemaVersion: 2,
+      skeleton: source.skeleton,
+      blocks: body.layoutSchema.blocks as LayoutSchemaV2['blocks'],
+      ...(body.layoutSchema.theme ? { theme: body.layoutSchema.theme as LayoutSchemaV2['theme'] } : {}),
+    };
+
+    const issues = validateLayoutSchema(doc, BLOCK_MANIFEST);
+    if (issues.length > 0) {
+      // F-2 / D-72: Save As from seed-template-utility lands here — the UTILITY
+      // starter deliberately has no visible ITEMS/CHARGES block (D-67), so
+      // D-31 rejects it with a clear, named 422. This stands until the utility
+      // data model adds a real body block.
+      throw new UnprocessableEntityException({ error_code: 'INVALID_LAYOUT_SCHEMA', issues });
     }
 
-    try {
-      return await this.prisma.template.create({
-        data: {
-          merchantId,
-          name: preset.name,
-          billType: preset.billType,
-          skeleton: preset.skeleton,
-          // A fresh Prisma-fetched JSON value — copying it into a new row's
-          // column is already an independent Postgres jsonb value, not a
-          // reference of any kind. No further serialization needed for the
-          // "deep copy" guarantee.
-          layoutSchema: preset.layoutSchema as Prisma.InputJsonValue,
-          version: 1,
-          parentTemplateId: null,
-          isHead: true,
-        },
-      });
-    } catch (err) {
-      // S-11 (D-63): the merchant has already cloned this starter — a second
-      // copy would be a duplicate live head name, which the partial unique
-      // index now rejects. Named 409 rather than a raw P2002/500. F-2 folds
-      // clone() into Save As, where F-1's allocator suffixes to `(1)` instead.
-      if (isTemplateNameConflict(err)) {
-        throw new ConflictException(TEMPLATE_NAME_TAKEN);
+    // F-1 / D-63: the allocator applies on Save As. Its probe and the insert
+    // are not atomic, so a concurrent Save As can take the name in between —
+    // caught as P2002 and retried with a fresh allocation, bounded. Its own
+    // loop (Q8): save()'s loop also carries the flip/repoint.
+    for (let attempt = 1; attempt <= MAX_NAME_ALLOCATION_RETRIES; attempt++) {
+      const name = await this.allocateName(this.prisma, merchantId, desiredName);
+      try {
+        return await this.prisma.template.create({
+          data: {
+            merchantId,
+            name,
+            billType: source.billType,
+            skeleton: source.skeleton,
+            layoutSchema: doc as unknown as Prisma.InputJsonValue,
+            version: 1,
+            parentTemplateId: null,
+            isHead: true,
+          },
+        });
+      } catch (err) {
+        if (isTemplateNameConflict(err)) {
+          if (attempt < MAX_NAME_ALLOCATION_RETRIES) {
+            continue;
+          }
+          throw new ConflictException(TEMPLATE_NAME_TAKEN);
+        }
+        throw err;
       }
-      throw err;
     }
+
+    // The loop returns on success and throws on its final attempt; this is only
+    // here to satisfy the type checker.
+    throw new ConflictException(TEMPLATE_NAME_TAKEN);
   }
 
   // C-3: set-default. Target must be within read-scope (C-1) and a live,

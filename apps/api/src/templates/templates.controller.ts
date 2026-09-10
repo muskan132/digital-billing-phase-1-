@@ -24,11 +24,8 @@ export class TemplatesController {
     return this.templatesService.save(id, body, ctx.merchantId);
   }
 
-  @Post(':id/clone')
-  @HttpCode(201)
-  async clone(@Param('id') id: string, @CurrentMerchantContext() ctx: MerchantContext) {
-    return this.templatesService.clone(id, ctx.merchantId);
-  }
+  // F-2 (D-49/D-62): no demo Save As — the demo builder has no save handler at
+  // all and is not backfilled. clone() (the demo's old copy path) is removed.
 
   @Post(':id/set-default')
   async setDefault(@Param('id') id: string, @CurrentMerchantContext() ctx: MerchantContext) {

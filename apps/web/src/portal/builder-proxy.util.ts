@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 
 // W-3: shared body for the four builder write-action Route Handlers
-// (save/clone/set-default/archive) — same server-to-server pattern
+// (save/save-as/set-default/archive) — same server-to-server pattern
 // app/portal/logout/route.ts established (W-1): the browser calls this
 // Next route, which fetches the CSRF token and calls the real API itself,
 // forwarding the session cookie by hand since a server-side fetch doesn't
@@ -14,7 +14,7 @@ const SESSION_COOKIE = 'session';
 
 export async function proxyPortalTemplateWrite(
   templateId: string,
-  action: 'save' | 'clone' | 'set-default' | 'archive',
+  action: 'save' | 'save-as' | 'set-default' | 'archive',
   body?: unknown,
 ): Promise<NextResponse> {
   const cookieStore = await cookies();

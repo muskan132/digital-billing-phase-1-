@@ -42,6 +42,15 @@ const VALID_BODY: SaveTemplateBody = {
   },
 };
 
+// A P2002 shaped like the partial name index's violation (S-11).
+function fakeNameP2002() {
+  return new Prisma.PrismaClientKnownRequestError('unique violation', {
+    code: 'P2002',
+    clientVersion: 'test',
+    meta: { target: 'Template_merchantId_name_head_key' },
+  });
+}
+
 describe('TemplatesService', () => {
   let templateFindMany: jest.Mock;
   let templateFindFirst: jest.Mock;
@@ -273,14 +282,6 @@ describe('TemplatesService', () => {
       expect(transactionFn).not.toHaveBeenCalled();
     });
 
-    function fakeNameP2002() {
-      return new Prisma.PrismaClientKnownRequestError('unique violation', {
-        code: 'P2002',
-        clientVersion: 'test',
-        meta: { target: 'Template_merchantId_name_head_key' },
-      });
-    }
-
     it('the P2002 retry is bounded — a permanently conflicting name fails cleanly after exactly MAX_NAME_ALLOCATION_RETRIES attempts, never loops', async () => {
       txTemplateCreate.mockRejectedValue(fakeNameP2002());
 
@@ -300,32 +301,91 @@ describe('TemplatesService', () => {
     });
   });
 
-  describe('clone (C-3)', () => {
-    it('deep-copies a library preset into a fresh, independent lineage', async () => {
-      templateFindFirst.mockResolvedValue(LIBRARY_TEMPLATE);
-      const result = await service.clone(LIBRARY_TEMPLATE.id, MERCHANT_ID);
+  describe('saveAs (F-2 / D-62)', () => {
+    const SAVE_AS_BODY = { name: 'My Copy', layoutSchema: { blocks: VALID_BODY.layoutSchema.blocks } };
+
+    it('writes exactly one new row into a fresh lineage from a STARTER — merchantId = session, name, version 1, parentTemplateId null, isHead true; no transaction, no default repoint', async () => {
+      templateFindFirst.mockResolvedValueOnce(LIBRARY_TEMPLATE).mockResolvedValue(null);
+      const result = await service.saveAs(LIBRARY_TEMPLATE.id, SAVE_AS_BODY, MERCHANT_ID);
 
       expect(templateCreate).toHaveBeenCalledWith({
         data: expect.objectContaining({
           merchantId: 'seed-merchant-demo',
+          name: 'My Copy',
           version: 1,
           parentTemplateId: null,
           isHead: true,
         }),
       });
+      expect(templateCreate).toHaveBeenCalledTimes(1);
+      expect(transactionFn).not.toHaveBeenCalled();
+      expect(merchantUpdate).not.toHaveBeenCalled();
       expect(result.id).toBe('tpl-cloned');
     });
 
-    it('throws NotFoundException when the preset is missing or out of scope', async () => {
+    it('works from the merchant\'s OWN template too — no CANNOT_CLONE_MERCHANT_TEMPLATE refusal (D-62)', async () => {
+      templateFindFirst.mockResolvedValueOnce(MERCHANT_OWNED_TEMPLATE).mockResolvedValue(null);
+      await expect(service.saveAs(MERCHANT_OWNED_TEMPLATE.id, SAVE_AS_BODY, MERCHANT_ID)).resolves.toBeDefined();
+      expect(templateCreate).toHaveBeenCalledTimes(1);
+    });
+
+    it('reconstructs skeleton and billType from the SOURCE, and layoutSchema from the edited body', async () => {
+      templateFindFirst.mockResolvedValueOnce(PARENT_TEMPLATE).mockResolvedValue(null);
+      await service.saveAs(PARENT_TEMPLATE.id, SAVE_AS_BODY, MERCHANT_ID);
+
+      const createCall = templateCreate.mock.calls[0][0];
+      expect(createCall.data.skeleton).toBe(PARENT_TEMPLATE.skeleton);
+      expect(createCall.data.billType).toBe(PARENT_TEMPLATE.billType);
+      expect(createCall.data.layoutSchema).toEqual({
+        schemaVersion: 2,
+        skeleton: PARENT_TEMPLATE.skeleton,
+        blocks: VALID_BODY.layoutSchema.blocks,
+      });
+    });
+
+    it('the allocator suffixes a name the merchant already holds to "(1)"', async () => {
+      templateFindFirst
+        .mockResolvedValueOnce(LIBRARY_TEMPLATE) // source lookup
+        .mockResolvedValueOnce({ id: 'existing' }) // probe: "My Copy" taken
+        .mockResolvedValue(null); // probe: "My Copy (1)" free
+      await service.saveAs(LIBRARY_TEMPLATE.id, SAVE_AS_BODY, MERCHANT_ID);
+      expect(templateCreate).toHaveBeenCalledWith({ data: expect.objectContaining({ name: 'My Copy (1)' }) });
+    });
+
+    it('throws NotFoundException when the source is missing or out of scope — zero writes', async () => {
       templateFindFirst.mockResolvedValue(null);
-      await expect(service.clone('unknown', MERCHANT_ID)).rejects.toThrow(NotFoundException);
+      await expect(service.saveAs('unknown', SAVE_AS_BODY, MERCHANT_ID)).rejects.toThrow(NotFoundException);
       expect(templateCreate).not.toHaveBeenCalled();
     });
 
-    it('refuses to clone a merchant-owned template', async () => {
-      templateFindFirst.mockResolvedValue(MERCHANT_OWNED_TEMPLATE);
-      await expect(service.clone(MERCHANT_OWNED_TEMPLATE.id, MERCHANT_ID)).rejects.toThrow(UnprocessableEntityException);
+    it.each(['   ', 42, '', undefined])('rejects a missing/blank/non-string name (%p) before any lookup — zero writes', async (bad) => {
+      await expect(service.saveAs(LIBRARY_TEMPLATE.id, { ...SAVE_AS_BODY, name: bad as never }, MERCHANT_ID)).rejects.toThrow(
+        UnprocessableEntityException,
+      );
+      expect(templateFindFirst).not.toHaveBeenCalled();
       expect(templateCreate).not.toHaveBeenCalled();
+    });
+
+    it('rejects a document failing validateLayoutSchema (D-31 — this is the seed-template-utility case) — zero writes', async () => {
+      templateFindFirst.mockResolvedValueOnce(LIBRARY_TEMPLATE).mockResolvedValue(null);
+      const noHeader = {
+        name: 'X',
+        layoutSchema: { blocks: [{ id: 'blk_1', type: 'ITEMS', order: 1, props: {}, visible: true, width: 'full' }] },
+      };
+      const err = await service.saveAs(LIBRARY_TEMPLATE.id, noHeader, MERCHANT_ID).catch((e) => e);
+      expect(err).toBeInstanceOf(UnprocessableEntityException);
+      expect((err as UnprocessableEntityException).getResponse()).toMatchObject({ error_code: 'INVALID_LAYOUT_SCHEMA' });
+      expect(templateCreate).not.toHaveBeenCalled();
+    });
+
+    it('the P2002 retry is bounded — fails cleanly with 409 after exactly MAX_NAME_ALLOCATION_RETRIES attempts', async () => {
+      templateFindFirst.mockResolvedValueOnce(LIBRARY_TEMPLATE).mockResolvedValue(null);
+      templateCreate.mockRejectedValue(fakeNameP2002());
+
+      const err = await service.saveAs(LIBRARY_TEMPLATE.id, SAVE_AS_BODY, MERCHANT_ID).catch((e) => e);
+      expect(err).toBeInstanceOf(ConflictException);
+      expect((err as ConflictException).getResponse()).toMatchObject({ error_code: 'TEMPLATE_NAME_TAKEN' });
+      expect(templateCreate).toHaveBeenCalledTimes(MAX_NAME_ALLOCATION_RETRIES);
     });
   });
 

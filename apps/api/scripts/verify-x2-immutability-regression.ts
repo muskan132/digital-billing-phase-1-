@@ -1,7 +1,7 @@
 // X-2 — regression: re-run TEMPLATE_SYSTEM_v2 §7's immutability guarantee against a
 // REAL, DB-backed builder edit, not the mocked unit test in
 // layout-snapshot-immutability.spec.ts. Exercises the actual production services —
-// TemplatesService.clone/save (C-2/C-3, real Prisma, real transaction) and
+// TemplatesService.saveAs/save (F-2/C-2, real Prisma, real transaction) and
 // BillsService.createBill / LinksService.resolve (real write + read paths) — against a
 // live database. No mocks anywhere in this script.
 //
@@ -28,7 +28,7 @@ import { CreateBillDto } from '../src/bills/dto/create-bill.dto';
 config({ path: path.join(__dirname, '..', '.env') });
 
 const TEST_MERCHANT_ID = 'seed-merchant-demo';
-const SOURCE_PRESET_ID = 'seed-template-retail'; // TAX_INVOICE, library preset — cloned, never forked directly (D-33).
+const SOURCE_PRESET_ID = 'seed-template-retail'; // TAX_INVOICE library starter — Save-As'd, never forked directly (D-33/D-62).
 
 interface LayoutBlock {
   id: string;
@@ -110,12 +110,18 @@ async function main() {
   // cleaned in the `finally` below. Captured here, asserted after cleanup.
   const templateCountBefore = await prisma.template.count();
 
-  // ---- Step 1: real C-3 clone — a genuine merchant-owned template to fork against.
-  // Presets (merchantId: null) cannot be forked directly (CANNOT_FORK_LIBRARY_PRESET),
-  // so this is the same path a real merchant would take before ever editing a template.
-  const cloned = await templatesService.clone(SOURCE_PRESET_ID, TEST_MERCHANT_ID);
-  if (cloned.merchantId !== TEST_MERCHANT_ID) fail(`clone() produced merchantId=${cloned.merchantId}, expected ${TEST_MERCHANT_ID}`);
-  console.log(`PASS  clone() — new merchant-owned template ${cloned.id} (version ${cloned.version})`);
+  // ---- Step 1: real F-2 Save As — a genuine merchant-owned template to fork
+  // against. Presets (merchantId: null) cannot be forked directly
+  // (CANNOT_FORK_LIBRARY_PRESET), so Save As is the path a real merchant takes
+  // before ever editing a template (clone() was folded into it, D-62).
+  const preset = await prisma.template.findUniqueOrThrow({ where: { id: SOURCE_PRESET_ID }, select: { layoutSchema: true } });
+  const cloned = await templatesService.saveAs(
+    SOURCE_PRESET_ID,
+    { name: `x2 scratch ${Date.now()}`, layoutSchema: preset.layoutSchema as { blocks: unknown } },
+    TEST_MERCHANT_ID,
+  );
+  if (cloned.merchantId !== TEST_MERCHANT_ID) fail(`saveAs() produced merchantId=${cloned.merchantId}, expected ${TEST_MERCHANT_ID}`);
+  console.log(`PASS  saveAs() — new merchant-owned template ${cloned.id} (version ${cloned.version})`);
 
   // ---- Step 2: real BillsService.createBill — a genuine bill issued against that
   // template, exactly as the public API would produce one.
@@ -218,7 +224,7 @@ async function main() {
   }
   console.log(`PASS  cloned template ${cloned.id} — layoutSchema untouched across all 3 forks`);
 
-  // ---- Step 5: exactly one isHead=true across the 4-row lineage (1 clone + 3 forks).
+  // ---- Step 5: exactly one isHead=true across the 4-row lineage (1 Save As + 3 forks).
   const lineageRows = await prisma.template.findMany({ where: { id: { in: lineage } }, select: { id: true, isHead: true } });
   const heads = lineageRows.filter((r) => r.isHead);
   if (heads.length !== 1 || heads[0].id !== headId) {

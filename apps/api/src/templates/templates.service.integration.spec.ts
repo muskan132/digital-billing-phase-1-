@@ -27,6 +27,13 @@ interface ScratchMerchant {
   merchantId: string;
 }
 
+// The smallest block array that passes validateLayoutSchema / D-31 (visible
+// HEADER + visible ITEMS) — Save As runs the validator, unlike the old clone().
+const MINIMAL_VALID_BLOCKS = [
+  { id: 'blk_1', type: 'HEADER', order: 1, props: {}, visible: true, width: 'full' },
+  { id: 'blk_2', type: 'ITEMS', order: 2, props: {}, visible: true, width: 'full' },
+];
+
 async function createScratchMerchant(): Promise<ScratchMerchant> {
   const merchantId = uniqueId('merchant');
   await prisma.merchant.create({
@@ -131,8 +138,10 @@ describe('Every builder route: another merchant\'s real templateId 404s exactly 
     ).rejects.toBeInstanceOf(NotFoundException);
   });
 
-  it('clone', async () => {
-    await expect(service.clone(merchantBTemplateId, merchantA.merchantId)).rejects.toBeInstanceOf(NotFoundException);
+  it('saveAs', async () => {
+    await expect(
+      service.saveAs(merchantBTemplateId, { name: 'x', layoutSchema: { blocks: [] } }, merchantA.merchantId),
+    ).rejects.toBeInstanceOf(NotFoundException);
   });
 
   it('setDefault', async () => {
@@ -149,7 +158,7 @@ describe('Every builder route: another merchant\'s real templateId 404s exactly 
   });
 });
 
-describe('A library preset: readable/clonable by any merchant, never forkable or archivable directly (real DB, D-33 — confirmed unchanged)', () => {
+describe('A library preset: readable/Save-As-able by any merchant, never forkable or archivable directly (real DB, D-33/D-62 — confirmed)', () => {
   let merchant: ScratchMerchant;
   let presetId: string;
 
@@ -173,11 +182,14 @@ describe('A library preset: readable/clonable by any merchant, never forkable or
     await prisma.template.deleteMany({ where: { id: presetId } });
   });
 
-  it('findOne and clone succeed for an arbitrary real merchant; save and archive on the preset itself are refused (422, not 404)', async () => {
+  it('findOne and saveAs succeed for an arbitrary real merchant; save (fork) on the preset itself is still refused (422, not 404)', async () => {
     await expect(service.findOne(presetId, merchant.merchantId)).resolves.toMatchObject({ id: presetId });
-    const cloned = await service.clone(presetId, merchant.merchantId);
-    expect(cloned.merchantId).toBe(merchant.merchantId);
-    await prisma.template.deleteMany({ where: { id: cloned.id } });
+
+    const copy = await service.saveAs(presetId, { name: 'W-3 itest preset copy', layoutSchema: { blocks: MINIMAL_VALID_BLOCKS } }, merchant.merchantId);
+    expect(copy.merchantId).toBe(merchant.merchantId);
+    expect(copy.parentTemplateId).toBeNull();
+    expect(copy.version).toBe(1);
+    await prisma.template.deleteMany({ where: { id: copy.id } });
 
     await expect(service.save(presetId, { layoutSchema: { blocks: [] } }, merchant.merchantId)).rejects.toBeInstanceOf(
       UnprocessableEntityException,
@@ -293,20 +305,18 @@ describe('S-11 / D-63: partial unique index on (merchantId, name) WHERE isHead =
     ).resolves.toBe(1);
   });
 
-  it('clone() twice on the same starter by the same merchant → first succeeds, second is a named 409 TEMPLATE_NAME_TAKEN (Option B), not a raw 500', async () => {
-    const first = await service.clone(presetId, merchant.merchantId);
+  it('saveAs twice from the same starter with the same name → first is the name, second is "(1)" (F-2 supersedes S-11\'s interim 409)', async () => {
+    const first = await service.saveAs(presetId, { name: 'S-11 itest starter', layoutSchema: { blocks: MINIMAL_VALID_BLOCKS } }, merchant.merchantId);
     expect(first.merchantId).toBe(merchant.merchantId);
     expect(first.name).toBe('S-11 itest starter');
 
-    const err = await service.clone(presetId, merchant.merchantId).catch((e: unknown) => e);
-    expect(err).toBeInstanceOf(ConflictException);
-    expect((err as ConflictException).getResponse()).toMatchObject({ error_code: 'TEMPLATE_NAME_TAKEN' });
+    const second = await service.saveAs(presetId, { name: 'S-11 itest starter', layoutSchema: { blocks: MINIMAL_VALID_BLOCKS } }, merchant.merchantId);
+    expect(second.name).toBe('S-11 itest starter (1)');
 
-    // The failed second clone wrote nothing.
-    const clonesOfName = await prisma.template.count({
-      where: { merchantId: merchant.merchantId, name: 'S-11 itest starter' },
+    const liveHeads = await prisma.template.count({
+      where: { merchantId: merchant.merchantId, isHead: true, name: { in: ['S-11 itest starter', 'S-11 itest starter (1)'] } },
     });
-    expect(clonesOfName).toBe(1);
+    expect(liveHeads).toBe(2);
   });
 
   it('save() on a normal lineage is unaffected — the fork flips the parent out of the index first, so name reuse within a lineage never trips it (D-63)', async () => {
@@ -439,5 +449,151 @@ describe('F-1: name allocation + rename on save (real DB)', () => {
 
     // The forced-conflict src lineage never produced a new head.
     expect((await prisma.template.findUniqueOrThrow({ where: { id: src.id } })).isHead).toBe(true);
+  });
+});
+
+// F-2 (D-62): Save As — clean-break copy. Real Postgres only.
+describe('F-2: Save As (real DB)', () => {
+  let merchant: ScratchMerchant;
+  const STARTER_ID = 'seed-template-receipt'; // real seeded starter, merchantId: null
+
+  beforeAll(async () => {
+    merchant = await createScratchMerchant();
+  });
+
+  afterAll(async () => {
+    await cleanupMerchant(merchant);
+  });
+
+  it('Save As from a STARTER → exactly one new row (merchantId = session, version 1, parentTemplateId null, isHead true) and the starter row is byte-identical after (isHead, layoutSchema, updatedAt)', async () => {
+    const before = await prisma.template.findUniqueOrThrow({ where: { id: STARTER_ID } });
+    const countBefore = await prisma.template.count({ where: { merchantId: merchant.merchantId } });
+
+    const copy = await service.saveAs(
+      STARTER_ID,
+      { name: 'F-2 from starter', layoutSchema: { blocks: MINIMAL_VALID_BLOCKS } },
+      merchant.merchantId,
+    );
+
+    expect(copy.merchantId).toBe(merchant.merchantId);
+    expect(copy.version).toBe(1);
+    expect(copy.parentTemplateId).toBeNull();
+    expect(copy.isHead).toBe(true);
+    expect(await prisma.template.count({ where: { merchantId: merchant.merchantId } })).toBe(countBefore + 1);
+
+    const after = await prisma.template.findUniqueOrThrow({ where: { id: STARTER_ID } });
+    expect(after.isHead).toBe(before.isHead);
+    expect(after.updatedAt.getTime()).toBe(before.updatedAt.getTime());
+    expect(JSON.stringify(after.layoutSchema)).toBe(JSON.stringify(before.layoutSchema));
+  });
+
+  it('Save As from the merchant\'s OWN template → two list entries, source isHead still true, neither default pointer changed', async () => {
+    const source = await createOwnTemplateWithName(merchant, 'F-2 own source', true, uniqueId('tpl'));
+    await prisma.merchant.update({ where: { id: merchant.merchantId }, data: { defaultReceiptTemplateId: source.id } });
+
+    const merchantBefore = await prisma.merchant.findUniqueOrThrow({ where: { id: merchant.merchantId } });
+
+    const copy = await service.saveAs(source.id, { name: 'F-2 own copy', layoutSchema: { blocks: MINIMAL_VALID_BLOCKS } }, merchant.merchantId);
+
+    const sourceAfter = await prisma.template.findUniqueOrThrow({ where: { id: source.id } });
+    expect(sourceAfter.isHead).toBe(true);
+
+    const merchantAfter = await prisma.merchant.findUniqueOrThrow({ where: { id: merchant.merchantId } });
+    expect(merchantAfter.defaultReceiptTemplateId).toBe(merchantBefore.defaultReceiptTemplateId);
+    expect(merchantAfter.defaultTaxInvoiceTemplateId).toBe(merchantBefore.defaultTaxInvoiceTemplateId);
+
+    const listIds = (await service.list(merchant.merchantId)).map((t) => t.id);
+    expect(listIds).toContain(source.id);
+    expect(listIds).toContain(copy.id);
+  });
+
+  it('the EDITED body blocks land in the new row, NOT the source\'s stored blocks', async () => {
+    const source = await createOwnTemplateWithName(merchant, 'F-2 edited src', true, uniqueId('tpl'));
+    // source has blocks: [] (createOwnTemplateWithName). Body carries a real edit.
+    const editedBlocks = [
+      { id: 'blk_h', type: 'HEADER', order: 1, props: {}, visible: true, width: 'full' },
+      { id: 'blk_i', type: 'ITEMS', order: 2, props: { heading: 'EDITED IN BODY' }, visible: true, width: 'full' },
+      { id: 'blk_f', type: 'FOOTER', order: 3, props: {}, visible: true, width: 'full' },
+    ];
+
+    const copy = await service.saveAs(source.id, { name: 'F-2 edited copy', layoutSchema: { blocks: editedBlocks } }, merchant.merchantId);
+
+    const copyDoc = copy.layoutSchema as { blocks: unknown[] };
+    expect(copyDoc.blocks).toEqual(editedBlocks);
+    // Source untouched.
+    expect((await prisma.template.findUniqueOrThrow({ where: { id: source.id } })).layoutSchema).toEqual({
+      schemaVersion: 2,
+      skeleton: 'MINIMALIST',
+      blocks: [],
+    });
+  });
+
+  it('skeleton and billType come from the SOURCE, not the body', async () => {
+    const copy = await service.saveAs(
+      STARTER_ID, // seed-template-receipt: RECEIPT / MINIMALIST
+      { name: 'F-2 skeleton check', layoutSchema: { blocks: MINIMAL_VALID_BLOCKS } },
+      merchant.merchantId,
+    );
+    expect(copy.skeleton).toBe('MINIMALIST');
+    expect(copy.billType).toBe('RECEIPT');
+    expect((copy.layoutSchema as { skeleton: string }).skeleton).toBe('MINIMALIST');
+  });
+
+  it('Save As from `seed-template-utility` → a clear D-31-named 422, not a silent/confusing rejection (F-2 Option iii / D-72); zero rows written', async () => {
+    const utility = await prisma.template.findUniqueOrThrow({ where: { id: 'seed-template-utility' } });
+    const utilityBlocks = (utility.layoutSchema as { blocks: unknown[] }).blocks;
+    const countBefore = await prisma.template.count({ where: { merchantId: merchant.merchantId } });
+
+    const err = await service
+      .saveAs('seed-template-utility', { name: 'F-2 my utility', layoutSchema: { blocks: utilityBlocks } }, merchant.merchantId)
+      .catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(UnprocessableEntityException);
+    const res = (err as UnprocessableEntityException).getResponse() as { error_code: string; issues: { message: string }[] };
+    expect(res.error_code).toBe('INVALID_LAYOUT_SCHEMA');
+    expect(res.issues.some((i) => /ITEMS or CHARGES/.test(i.message))).toBe(true);
+    expect(await prisma.template.count({ where: { merchantId: merchant.merchantId } })).toBe(countBefore);
+  });
+
+  it('name is required — missing/blank → 422 MALFORMED_REQUEST, zero rows', async () => {
+    const countBefore = await prisma.template.count({ where: { merchantId: merchant.merchantId } });
+    await expect(
+      service.saveAs(STARTER_ID, { layoutSchema: { blocks: MINIMAL_VALID_BLOCKS } } as never, merchant.merchantId),
+    ).rejects.toBeInstanceOf(UnprocessableEntityException);
+    await expect(
+      service.saveAs(STARTER_ID, { name: '   ', layoutSchema: { blocks: MINIMAL_VALID_BLOCKS } }, merchant.merchantId),
+    ).rejects.toBeInstanceOf(UnprocessableEntityException);
+    expect(await prisma.template.count({ where: { merchantId: merchant.merchantId } })).toBe(countBefore);
+  });
+
+  it('a name the merchant already holds → the allocator suffixes to "(1)" (D-63 on Save As)', async () => {
+    await createOwnTemplateWithName(merchant, 'F-2 dup name', true, uniqueId('tpl'));
+    const copy = await service.saveAs(STARTER_ID, { name: 'F-2 dup name', layoutSchema: { blocks: MINIMAL_VALID_BLOCKS } }, merchant.merchantId);
+    expect(copy.name).toBe('F-2 dup name (1)');
+  });
+
+  it('two concurrent Save As racing for the same name (real Postgres) both succeed with DISTINCT names', async () => {
+    const [ra, rb] = await Promise.all([
+      service.saveAs(STARTER_ID, { name: 'F-2 race', layoutSchema: { blocks: MINIMAL_VALID_BLOCKS } }, merchant.merchantId),
+      service.saveAs(STARTER_ID, { name: 'F-2 race', layoutSchema: { blocks: MINIMAL_VALID_BLOCKS } }, merchant.merchantId),
+    ]);
+    expect(new Set([ra.name, rb.name])).toEqual(new Set(['F-2 race', 'F-2 race (1)']));
+  });
+
+  it('the Save As retry is bounded — a forced permanent conflict fails cleanly after exactly MAX_NAME_ALLOCATION_RETRIES attempts', async () => {
+    await createOwnTemplateWithName(merchant, 'F-2 perma', true, uniqueId('tpl'));
+    const spy = jest
+      .spyOn(service as unknown as { allocateName: () => Promise<string> }, 'allocateName')
+      .mockResolvedValue('F-2 perma');
+    try {
+      const err = await service
+        .saveAs(STARTER_ID, { name: 'whatever', layoutSchema: { blocks: MINIMAL_VALID_BLOCKS } }, merchant.merchantId)
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(ConflictException);
+      expect((err as ConflictException).getResponse()).toMatchObject({ error_code: 'TEMPLATE_NAME_TAKEN' });
+      expect(spy).toHaveBeenCalledTimes(MAX_NAME_ALLOCATION_RETRIES);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

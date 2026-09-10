@@ -1,6 +1,6 @@
 // W-2/W-3: GET /portal/templates(/:id) — read-only list/detail, for the
 // dashboard and the builder's initial load. W-3 adds the mutating builder
-// routes (save/clone/set-default/archive) below, reusing TemplatesService
+// routes (save/save-as/set-default/archive) below, reusing TemplatesService
 // exactly as-is (D-46) — SessionGuard/MerchantContext instead of
 // DemoOnlyGuard/SEED_MERCHANT_ID, same fork-on-write mechanics (D-32/D-33),
 // same 404-not-403 cross-merchant scoping (D-47), already built into every
@@ -16,7 +16,7 @@ import { UserRole } from '@prisma/client';
 import { SessionGuard } from '../auth/session.guard';
 import { Roles } from '../auth/roles.decorator';
 import { CurrentMerchantContext, MerchantContext } from '../auth/merchant-context';
-import { SaveTemplateBody, TemplatesService } from './templates.service';
+import { SaveAsBody, SaveTemplateBody, TemplatesService } from './templates.service';
 
 export interface PortalTemplateListItemDto {
   id: string;
@@ -76,11 +76,14 @@ export class PortalTemplatesController {
     return this.templatesService.save(id, body, ctx.merchantId);
   }
 
-  @Post(':id/clone')
+  // F-2 (D-62): Save As — replaces clone(). Takes { name, layoutSchema }; works
+  // from a starter or the merchant's own template; persists the edited body doc
+  // into a new lineage without touching the source.
+  @Post(':id/save-as')
   @HttpCode(201)
   @Roles(UserRole.MERCHANT_ADMIN)
-  async clone(@Param('id') id: string, @CurrentMerchantContext() ctx: MerchantContext) {
-    return this.templatesService.clone(id, ctx.merchantId);
+  async saveAs(@Param('id') id: string, @Body() body: SaveAsBody, @CurrentMerchantContext() ctx: MerchantContext) {
+    return this.templatesService.saveAs(id, body, ctx.merchantId);
   }
 
   @Post(':id/set-default')

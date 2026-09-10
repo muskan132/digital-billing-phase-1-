@@ -249,18 +249,21 @@ async function main() {
       console.log('PASS  POST .../save -> 404, real re-SELECT confirms zero write (row + count unchanged)');
     }
 
-    // -- POST .../clone — 404-on-mutate (clone reads by id first; B's private template is out of A's OR-null scope).
+    // -- POST .../save-as (F-2, replaces .../clone) — 404-on-mutate: saveAs reads
+    // the source by id first, and B's private template is out of A's OR-null scope.
+    // Body is well-formed so the 404 comes from scoping, not body validation.
     {
       const beforeCount = await prisma.template.count({ where: { merchantId: merchantA.merchantId } });
       const token = await csrfToken(merchantA);
-      const res = await fetch(`${API_BASE}/portal/templates/${templateB.id}/clone`, {
+      const res = await fetch(`${API_BASE}/portal/templates/${templateB.id}/save-as`, {
         method: 'POST',
-        headers: { cookie: cookie(merchantA), 'x-csrf-token': token },
+        headers: { cookie: cookie(merchantA), 'x-csrf-token': token, 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'x3 probe', layoutSchema: { blocks: [] } }),
       });
-      if (res.status !== 404) findingFail(`POST .../clone — expected 404 for B's template as A, got ${res.status}`);
+      if (res.status !== 404) findingFail(`POST .../save-as — expected 404 for B's template as A, got ${res.status}`);
       const afterCount = await prisma.template.count({ where: { merchantId: merchantA.merchantId } });
-      if (afterCount !== beforeCount) findingFail(`POST .../clone on B's template as A -> 404, but a row was created under A anyway (${beforeCount} -> ${afterCount})`);
-      console.log('PASS  POST .../clone -> 404, real re-SELECT confirms zero write');
+      if (afterCount !== beforeCount) findingFail(`POST .../save-as on B's template as A -> 404, but a row was created under A anyway (${beforeCount} -> ${afterCount})`);
+      console.log('PASS  POST .../save-as -> 404, real re-SELECT confirms zero write');
     }
 
     // -- POST .../set-default — 404-on-mutate, confirm A's OWN default pointers untouched
@@ -303,9 +306,16 @@ async function main() {
 
     const merchantC = await createScratchSession();
     try {
-      const cloned = await templatesService.clone(SOURCE_PRESET_ID, merchantC.merchantId);
-      if (cloned.merchantId !== merchantC.merchantId) findingFail(`clone() produced merchantId=${cloned.merchantId}, expected ${merchantC.merchantId}`);
-      console.log(`PASS  clone() (direct, setup only) — new merchant-owned template ${cloned.id}`);
+      // F-2: setup uses saveAs() (clone() is gone) — copy the shared starter's
+      // layout into a merchant-owned template to fork against.
+      const preset = await prisma.template.findUniqueOrThrow({ where: { id: SOURCE_PRESET_ID }, select: { layoutSchema: true } });
+      const cloned = await templatesService.saveAs(
+        SOURCE_PRESET_ID,
+        { name: `x3 scratch ${Date.now()}`, layoutSchema: preset.layoutSchema as { blocks: unknown } },
+        merchantC.merchantId,
+      );
+      if (cloned.merchantId !== merchantC.merchantId) findingFail(`saveAs() produced merchantId=${cloned.merchantId}, expected ${merchantC.merchantId}`);
+      console.log(`PASS  saveAs() (direct, setup only) — new merchant-owned template ${cloned.id}`);
 
       const createResult = await billsService.createBill(buildBillDto(cloned.id, `c-${Date.now()}`), merchantC.merchantId);
       if (!createResult.created) findingFail('createBill() reported created:false on a fresh external_transaction_id');
