@@ -806,3 +806,31 @@ Hand-written SQL (Prisma v6 can't express a partial unique index — S-11 preced
 **7 · Append-only is enforced locally by absence of code paths only** (D-70's accepted gap — DB-level `REVOKE` is Compliance's, deferred). The enforcement is three tests that stay green forever: a method-surface assertion (`PiiExportAuditService.prototype` exposes exactly `record`), a repo-wide grep over production `.ts` (no `piiExportAudit.{update,updateMany,delete,deleteMany,upsert}` — `*.spec.ts` excluded, since integration teardown must delete its own scratch rows past the `ON DELETE RESTRICT` FKs), and a schema assertion (`PiiExportAudit` has no `@updatedAt`). A migration adding a mutation path, or an update method anywhere, trips these.
 
 **Module:** registered in `bills.module.ts` (export is bill-history-adjacent; E-2's controller lands there). `record()` returns `{ id, createdAt }` so E-2 can assert "exactly one row, this id."
+
+### D-81 · CSV export — column set, unbounded/materialized, escaping, error codes, shared extractions
+
+**Decision:** E-2's `GET /portal/bills/export.csv` executes D-70 (audit-first) and D-71 (contact projection, `MERCHANT_ADMIN`) with the following pinned.
+
+**1 · Column set** — 10 columns, identical between projections except the two contact columns.
+
+Both: `bill_id, created_at, bill_type, source, invoice_number, total_paise, currency, delivery_status`.
+
+`masked` adds `customer_mobile_masked, customer_email_masked` (via H-1's `maskMobilePortal`/`maskEmailPortal`).
+
+`full` adds `customer_mobile, customer_email` — the raw `Order.customerMobile_pii`/`customerEmail_pii`.
+
+`delivery_status` is the most-recent `Broadcast.status` for the bill's order (`''` when the order has no broadcast — D-12). `total_paise` is a BigInt→string, never a number.
+
+"exactly D-48's detail field set" (E-2 verify) means, for `full`: raw mobile + raw email + `Broadcast.status` as the scalar `delivery_status` — and nothing else. Not the full `PortalBillDetailDto`: no line items, no `merchantGstin`, no subtotals/tax columns, no `broadcasts[]` array, no raw `Broadcast.recipient`. A stray column fails the serializer key-set test.
+
+**2 · Unbounded, materialized, buffered** — not streamed, no row cap. An export's purpose is the whole result set (D-71's reconciliation / CRM use cases), and the E-2 verify's "cross-checked against `SELECT count(*)`" structurally requires file rows == count. R-1's 200-cap reasoning (a dashboard, "a merchant almost never needs 50 numbers at once") is the opposite of an export's use. `PortalBillsService.exportRows()` runs a single `findMany` with no `take`, and the controller buffers the full CSV string before `res.send()`. Buffered (not a DB cursor) because E-1's contract needs the exact `rowCount` before the audit commits (D-70), which a cursor cannot give without a separate `COUNT`; and buffering is what makes the D-80 §3 orphan-row failure testable. Escape hatch, recorded: if memory ever bites at real volume, the future path is a cursor + `COUNT`-first accepting D-70's over-count.
+
+**3 · CSV escaping + formula-injection guard.** `csvField()` (in `bills-export-csv.util.ts`): RFC 4180 — a field containing `,`, `"`, `\r`, or `\n` is wrapped in `"…"` with internal `"` doubled; and a field whose first character is `= + - @ \t \r` is prefixed with `'` so a spreadsheet does not evaluate it as a formula. Applied to every field; the only ones that can carry hostile text are `invoice_number` (caller-supplied, D-20) and the contact columns. Line endings are `\r\n` with a trailing newline.
+
+**4 · Two stable error codes.** `422 { error_code: 'INVALID_CONTACT_PARAM' }` for a missing or unrecognised `contact` — checked first in the controller, before any DB activity or audit write (D-70/D-71). Bad `dateFrom`/`dateTo`/`billType`/`source` → `400` (H-1's `BadRequestException` behaviour, unchanged). `record()` rejecting → plain `500`, zero CSV bytes, never a partial file, never a `2xx` (D-80 §2).
+
+**5 · Shared extraction units** (D-80 "no duplication"). `portal-bills-filters.util.ts` — `parseIsoDate`/`parseBillType`/`parseSource`/`parseLimit`, moved out of `portal-bills.controller.ts` verbatim; both `PortalBillsController.list` and `exportCsv` import them. `buildBillFilterWhere(merchantId, filters)` — exported from `portal-bills.service.ts`, the `merchantId` + `billType` + `createdAt` + `order.source` where object extracted from `list()`'s inline body; `list()` and `exportRows()` build it one way. Zero behaviour change; H-1's existing tests re-verify.
+
+**6 · Sequencing** (D-80 §2), implemented in `exportCsv` in this order: contact `422` (zero DB) → `parse*` filters (`400`) → `exportRows()` materialize → `rowCount = rows.length` → normalize filters to `ExportAuditFilters` (only keys the merchant sent, `{}` if none) → `await auditService.record(...)` → serialize → set `text/csv` + `Content-Disposition: attachment; filename="bills-export-<merchant-8>-<yyyymmdd>.csv"` → `res.send(csv)`. A serializer failure after step 5 → `500`, no file, orphan audit row (D-80 §3, accepted).
+
+**Web:** the browser cannot hit `:4000/portal/bills/export.csv` directly (httpOnly session cookie, cross-origin), so a Next GET proxy `app/portal/bills/export/route.ts` forwards the cookie and pipes the CSV + its headers back. Two `MERCHANT_ADMIN`-only "Download CSV" links (masked / full) on `/portal/bills`, carrying the current filters.

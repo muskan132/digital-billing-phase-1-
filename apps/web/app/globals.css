@@ -1267,3 +1267,30 @@ a.portal-templates-row-name:hover {
   color: var(--semantic-error);
   font-size: 13px;
 }
+
+/* ==================== Portal bills — CSV export (E-2) ==================== */
+.portal-bills-export {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.portal-bills-export-label {
+  font-size: 13px;
+  color: var(--slate);
+}
+
+.portal-bills-export-link {
+  padding: 6px 12px;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--ink);
+  text-decoration: none;
+}
+
+.portal-bills-export-link:hover {
+  border-color: var(--primary);
+}

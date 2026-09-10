@@ -41,6 +41,39 @@ export interface PortalBillListParams {
   limit?: number;
 }
 
+// H-1 / E-2 / D-81: the merchant-scoped, filter-matched Bill `where`. Extracted
+// from list()'s inlined object so list() and exportRows() build it ONE way
+// (D-80's "no duplication"). `merchantId` is always in the same object — no
+// filter path can produce an unscoped query.
+export function buildBillFilterWhere(merchantId: string, filters: PortalBillListFilters): Prisma.BillWhereInput {
+  const { dateFrom, dateTo, billType, source } = filters;
+  return {
+    merchantId,
+    ...(billType ? { billType } : {}),
+    ...(dateFrom || dateTo
+      ? { createdAt: { ...(dateFrom ? { gte: dateFrom } : {}), ...(dateTo ? { lte: dateTo } : {}) } }
+      : {}),
+    ...(source ? { order: { source } } : {}),
+  };
+}
+
+// E-2 / D-81: one row of the CSV export — the SUPERSET of what both projections
+// need. The serializer (bills-export-csv.util.ts) picks masked vs raw contact;
+// `deliveryStatus` is the most-recent Broadcast.status (a scalar projection of
+// an authorized D-48 field), '' when the order has no broadcast (D-12).
+export interface ExportBillRow {
+  id: string;
+  createdAt: Date;
+  billType: BillType;
+  source: OrderSource;
+  invoiceNumber: string | null;
+  totalPaise: bigint;
+  currency: string;
+  deliveryStatus: BroadcastStatus | '';
+  customerMobile: string | null; // raw customerMobile_pii — masked or emitted raw by the serializer
+  customerEmail: string | null; // raw customerEmail_pii
+}
+
 // D-48's whitelist, enforced at this one construction site (the writer) —
 // the ONLY place a Bill+Order row is turned into what the client sees.
 // Never spread a raw Prisma row into the response.
@@ -234,19 +267,9 @@ export class PortalBillsService {
       }
     }
 
-    const { dateFrom, dateTo, billType, source } = params.filters;
-
-    // merchantId sits in the SAME where object as every filter, in the SAME
-    // findMany call below — there is no separate unscoped fetch this could
-    // fall back to.
-    const filterConditions: Prisma.BillWhereInput = {
-      merchantId,
-      ...(billType ? { billType } : {}),
-      ...(dateFrom || dateTo
-        ? { createdAt: { ...(dateFrom ? { gte: dateFrom } : {}), ...(dateTo ? { lte: dateTo } : {}) } }
-        : {}),
-      ...(source ? { order: { source } } : {}),
-    };
+    // merchantId sits in the SAME where object as every filter — there is no
+    // separate unscoped fetch this could fall back to (D-46/D-47).
+    const filterConditions = buildBillFilterWhere(merchantId, params.filters);
 
     // Manual keyset tie-break — not Prisma's native `cursor:` option, which
     // only supports a single unique field and can't express "createdAt < c
@@ -347,5 +370,48 @@ export class PortalBillsService {
     }
 
     return toDetailDto(bill);
+  }
+
+  // E-2 / D-70 / D-81: the merchant-scoped, filter-matched rows for the CSV
+  // export. UNBOUNDED and MATERIALIZED (D-81) — an export's purpose is the
+  // whole result set (reconciliation / CRM), and E-2 must know the exact count
+  // before the audit row commits, which a cursor stream cannot give without a
+  // separate COUNT. `merchantId` via buildBillFilterWhere — the same where H-1's
+  // list() uses. The CSV serializer does the contact projection, not this.
+  async exportRows(merchantId: string, filters: PortalBillListFilters): Promise<ExportBillRow[]> {
+    const rows = await this.prisma.bill.findMany({
+      where: buildBillFilterWhere(merchantId, filters),
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      select: {
+        id: true,
+        createdAt: true,
+        billType: true,
+        invoiceNumber: true,
+        totalPaise: true,
+        currency: true,
+        order: {
+          select: {
+            source: true,
+            customerMobile_pii: true,
+            customerEmail_pii: true,
+            // most-recent broadcast wins — one extra row per bill, tiny.
+            broadcasts: { select: { status: true }, orderBy: { createdAt: 'desc' }, take: 1 },
+          },
+        },
+      },
+    });
+
+    return rows.map((r) => ({
+      id: r.id,
+      createdAt: r.createdAt,
+      billType: r.billType,
+      source: r.order.source,
+      invoiceNumber: r.invoiceNumber,
+      totalPaise: r.totalPaise,
+      currency: r.currency,
+      deliveryStatus: r.order.broadcasts[0]?.status ?? '',
+      customerMobile: r.order.customerMobile_pii,
+      customerEmail: r.order.customerEmail_pii,
+    }));
   }
 }

@@ -107,6 +107,25 @@ export default async function PortalBillsPage({
   const cookieStore = await cookies();
   const sessionCookie = cookieStore.get(SESSION_COOKIE);
 
+  // E-2 (D-71): the CSV export is MERCHANT_ADMIN only — gate the button server-side.
+  let role: string | undefined;
+  try {
+    const meRes = await fetch(`${API_BASE_URL}/portal/me`, {
+      cache: 'no-store',
+      headers: sessionCookie ? { cookie: `${SESSION_COOKIE}=${sessionCookie.value}` } : {},
+    });
+    if (meRes.ok) role = ((await meRes.json()) as { role?: string }).role;
+  } catch {
+    role = undefined;
+  }
+  const canExport = role === 'MERCHANT_ADMIN';
+  const exportQuery = new URLSearchParams();
+  if (filters.dateFrom) exportQuery.set('dateFrom', filters.dateFrom);
+  if (filters.dateTo) exportQuery.set('dateTo', filters.dateTo);
+  if (filters.billType) exportQuery.set('billType', filters.billType);
+  if (filters.source) exportQuery.set('source', filters.source);
+  const exportHref = (contact: 'masked' | 'full') => `/portal/bills/export?contact=${contact}&${exportQuery.toString()}`;
+
   let response: Response;
   try {
     response = await fetch(`${API_BASE_URL}/portal/bills?${query.toString()}`, {
@@ -165,6 +184,14 @@ export default async function PortalBillsPage({
           Apply
         </button>
       </form>
+
+      {canExport && (
+        <div className="portal-bills-export">
+          <span className="portal-bills-export-label">Export (respects the filters above):</span>
+          <a href={exportHref('masked')} className="portal-bills-export-link">Download CSV — masked</a>
+          <a href={exportHref('full')} className="portal-bills-export-link">Download CSV — full contact</a>
+        </div>
+      )}
 
       {payload.items.length === 0 ? (
         <EmptyState />
