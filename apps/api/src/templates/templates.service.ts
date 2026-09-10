@@ -142,6 +142,20 @@ export class TemplatesService {
     });
   }
 
+  // F-5 (D-65): the archived view. The merchant's OWN archived templates, for a
+  // restore. Starters can't be archived (archive() scopes with a plain
+  // merchantId equality, no `OR null`), so none appear here. `isHead: true`
+  // mirrors list()'s one-entry-per-lineage shape and matches D-65's model —
+  // an archive()-archived row keeps isHead, which is exactly what reserves its
+  // name against the S-11 partial index; superseded non-head versions are
+  // lineage history, not the merchant's archive.
+  async listArchived(merchantId: string) {
+    return this.prisma.template.findMany({
+      where: { merchantId, isHead: true, archivedAt: { not: null } },
+      orderBy: { archivedAt: 'desc' },
+    });
+  }
+
   // W-2: read-only lookup of the merchant's own stored default — no decision
   // logic here, just the same field setDefault()/archive() already write/read
   // elsewhere, exposed for the dashboard's "Create invoice" entry point.
@@ -315,15 +329,26 @@ export class TemplatesService {
   // Not atomic with the caller's insert: the caller's bounded P2002 retry
   // closes the window between the probe here and the create (D-63: "retry, not
   // count-then-insert"). F-5 (restore) will reuse this too.
+  //
+  // F-5 (restore) passes `excludeId`: the row being restored may still be a
+  // live head holding its own name in the partial index (an archive()-archived
+  // row never lost isHead — D-65), so without the exclusion the allocator would
+  // "find" that row and suffix the name needlessly.
   private async allocateName(
     client: PrismaService | Prisma.TransactionClient,
     merchantId: string,
     desiredName: string,
+    excludeId?: string,
   ): Promise<string> {
     for (let n = 0; n <= MAX_NAME_SUFFIX; n++) {
       const candidate = n === 0 ? desiredName : `${desiredName} (${n})`;
       const taken = await client.template.findFirst({
-        where: { merchantId, name: candidate, isHead: true },
+        where: {
+          merchantId,
+          name: candidate,
+          isHead: true,
+          ...(excludeId ? { id: { not: excludeId } } : {}),
+        },
         select: { id: true },
       });
       if (!taken) {
@@ -554,6 +579,60 @@ export class TemplatesService {
       where: { id },
       data: { archivedAt: new Date() },
     });
+  }
+
+  // F-5 (D-65): restore an archived template — clears archivedAt. `isHead` is
+  // left exactly as it is: archive() never changed it, and D-65 is explicit
+  // that an archived row keeps isHead (that is what reserved its name).
+  //
+  // D-75: the lookup is scoped to `isHead: true` — restore() and listArchived()
+  // must agree on what "an archived template" is, and listArchived() already
+  // scopes isHead: true. Without the same scope, an archivePrevious-archived
+  // predecessor (isHead: false, archivedAt set) could be restored by id even
+  // though it appears in no view — producing a live row visible in neither
+  // list() nor listArchived() that cannot be archived back into view.
+  // Superseded non-head versions are lineage history, not the merchant's
+  // archive (D-65's own model). A non-head id is now a 404, indistinguishable
+  // from missing / another merchant's / a starter's / not-currently-archived
+  // (D-47). Same plain merchantId equality as archive()/deleteLineage().
+  async restore(id: string, merchantId: string) {
+    const template = await this.prisma.template.findFirst({
+      where: { id, merchantId, isHead: true, archivedAt: { not: null } },
+    });
+    if (!template) {
+      throw new NotFoundException();
+    }
+
+    // D-75 / S-11: the auto-suffix branch below is a CONCURRENCY GUARD ONLY.
+    // Under archive() semantics an archived row keeps isHead: true, so it keeps
+    // holding its own (merchantId, name) in the S-11 partial unique index
+    // (`WHERE "isHead" = true`). No live head can take that name in the
+    // meantime — create() → 409 (D-73), saveAs() suffixes away from it — so the
+    // desired name is always still free on the archive() → restore() path.
+    // allocateName's probe and the update are still not atomic, so a concurrent
+    // allocation racing for the name is caught as P2002 and retried, bounded —
+    // the same defensive shape as save()/saveAs() (D-63).
+    for (let attempt = 1; attempt <= MAX_NAME_ALLOCATION_RETRIES; attempt++) {
+      const name = await this.allocateName(this.prisma, merchantId, template.name, template.id);
+      try {
+        return await this.prisma.template.update({
+          where: { id: template.id },
+          data: { archivedAt: null, name },
+        });
+      } catch (err) {
+        if (isTemplateNameConflict(err)) {
+          if (attempt < MAX_NAME_ALLOCATION_RETRIES) {
+            continue;
+          }
+          throw new ConflictException(TEMPLATE_NAME_TAKEN);
+        }
+        throw err;
+      }
+    }
+
+    // The loop returns on success and throws on its final attempt; this is only
+    // here to satisfy the type checker.
+    throw new ConflictException(TEMPLATE_NAME_TAKEN);
   }
 
   // F-4 (D-64 / D-74): hard-delete an ENTIRE template lineage, permitted only

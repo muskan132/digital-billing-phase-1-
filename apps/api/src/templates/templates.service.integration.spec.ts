@@ -853,3 +853,141 @@ describe('F-4: hard delete (real DB)', () => {
     expect(await prisma.template.count({ where: { id: { in: [v1.id, v2.id, v3.id] } } })).toBe(3);
   });
 });
+
+// F-5 (D-65): archive semantics + archived view + restore. Real Postgres only —
+// the partial-index name reservation and the allocator race cannot be proven
+// with a mocked client.
+describe('F-5: archive view + restore (real DB)', () => {
+  let merchant: ScratchMerchant;
+  const F5_BODY = { layoutSchema: { blocks: MINIMAL_VALID_BLOCKS } };
+
+  beforeAll(async () => {
+    merchant = await createScratchMerchant();
+  });
+
+  afterAll(async () => {
+    await cleanupMerchant(merchant);
+  });
+
+  it('archive keeps isHead true; the row leaves list(), appears in listArchived(), and restore brings it back', async () => {
+    const t = await createOwnTemplateWithName(merchant, 'F-5 roundtrip', true, uniqueId('tpl'));
+
+    await service.archive(t.id, merchant.merchantId);
+    const archivedRow = await prisma.template.findUniqueOrThrow({ where: { id: t.id } });
+    expect(archivedRow.isHead).toBe(true);
+    expect(archivedRow.archivedAt).toBeInstanceOf(Date);
+
+    expect((await service.list(merchant.merchantId)).some((x) => x.id === t.id)).toBe(false);
+    expect((await service.listArchived(merchant.merchantId)).map((x) => x.id)).toContain(t.id);
+
+    const restored = await service.restore(t.id, merchant.merchantId);
+    expect(restored.archivedAt).toBeNull();
+    expect(restored.name).toBe('F-5 roundtrip');
+    expect((await service.list(merchant.merchantId)).some((x) => x.id === t.id)).toBe(true);
+    expect((await service.listArchived(merchant.merchantId)).some((x) => x.id === t.id)).toBe(false);
+  });
+
+  it('an archived template still reserves its name — a Save As of the same name is suffixed to (1)', async () => {
+    const t = await createOwnTemplateWithName(merchant, 'F-5 reserved', true, uniqueId('tpl'));
+    await service.archive(t.id, merchant.merchantId);
+
+    const copy = await service.saveAs(
+      'seed-template-receipt',
+      { name: 'F-5 reserved', layoutSchema: { blocks: MINIMAL_VALID_BLOCKS } },
+      merchant.merchantId,
+    );
+    expect(copy.name).toBe('F-5 reserved (1)');
+  });
+
+  // D-75: an archivePrevious-archived predecessor (isHead: false, archivedAt
+  // set) is lineage history, not the merchant's archive. It is in no view
+  // (list() wants isHead + not archived; listArchived() wants isHead), and
+  // restore() now scopes isHead: true, so restoring it by id is a 404.
+  it('restore on an archivePrevious-archived predecessor (isHead:false) → 404, row untouched', async () => {
+    const v1 = await createOwnTemplateWithName(merchant, 'F-5 predecessor', true, uniqueId('tpl'));
+    const v2 = await service.save(v1.id, { ...F5_BODY, archivePrevious: true }, merchant.merchantId);
+
+    const v1Archived = await prisma.template.findUniqueOrThrow({ where: { id: v1.id } });
+    expect(v1Archived.isHead).toBe(false);
+    expect(v1Archived.archivedAt).toBeInstanceOf(Date);
+    expect((await service.listArchived(merchant.merchantId)).some((x) => x.id === v1.id)).toBe(false);
+
+    await expect(service.restore(v1.id, merchant.merchantId)).rejects.toBeInstanceOf(NotFoundException);
+
+    const after = await prisma.template.findUniqueOrThrow({ where: { id: v1.id } });
+    expect(after.archivedAt).toEqual(v1Archived.archivedAt);
+    expect(after.isHead).toBe(false);
+    expect(after.name).toBe('F-5 predecessor');
+
+    // v2 (the live head) keeps the name — the predecessor never contended for it.
+    expect((await prisma.template.findUniqueOrThrow({ where: { id: v2.id } })).name).toBe('F-5 predecessor');
+  });
+
+  // D-75 / S-11 (index predicate: `WHERE "isHead" = true`): on the archive() →
+  // restore() path there is NO reachable name collision. An archived head keeps
+  // isHead: true, so it keeps holding its (merchantId, name) in the partial
+  // unique index; no live head can take that name (create → 409 per D-73,
+  // saveAs → suffixes away). The auto-suffix branch in restore() is a
+  // concurrency guard only, exercised by the mocked P2002-retry unit test.
+  it('restore of an archive()-archived head keeps its exact name — nothing could have taken it', async () => {
+    const t = await createOwnTemplateWithName(merchant, 'F-5 name kept', true, uniqueId('tpl'));
+    await service.archive(t.id, merchant.merchantId);
+
+    // create with the same name is refused while it is archived (name reserved).
+    await expect(
+      service.create({ name: 'F-5 name kept', billType: 'RECEIPT', skeleton: 'MINIMALIST' }, merchant.merchantId),
+    ).rejects.toBeInstanceOf(ConflictException);
+
+    const restored = await service.restore(t.id, merchant.merchantId);
+    expect(restored.name).toBe('F-5 name kept');
+    expect(restored.archivedAt).toBeNull();
+  });
+
+  it('archiving either current default → 422 (both pointers, dispatched by billType — S-10/D-60)', async () => {
+    const receipt = await createOwnTemplateWithName(merchant, 'F-5 receipt default', true, uniqueId('tpl'));
+    await service.setDefault(receipt.id, merchant.merchantId);
+    await expect(service.archive(receipt.id, merchant.merchantId)).rejects.toBeInstanceOf(UnprocessableEntityException);
+
+    const taxInvoice = await prisma.template.create({
+      data: {
+        id: uniqueId('tpl'),
+        merchantId: merchant.merchantId,
+        name: 'F-5 taxinv default',
+        billType: 'TAX_INVOICE',
+        layoutSchema: { schemaVersion: 2, skeleton: 'RETAIL', blocks: [] },
+        isHead: true,
+      },
+    });
+    await service.setDefault(taxInvoice.id, merchant.merchantId);
+    await expect(service.archive(taxInvoice.id, merchant.merchantId)).rejects.toBeInstanceOf(UnprocessableEntityException);
+
+    await prisma.merchant.update({
+      where: { id: merchant.merchantId },
+      data: { defaultReceiptTemplateId: null, defaultTaxInvoiceTemplateId: null },
+    });
+  });
+
+  it('restore: a second merchant\'s id, a starter id, and a not-currently-archived id all 404', async () => {
+    const other = await createScratchMerchant();
+    const theirs = await createOwnTemplateWithName(other, 'F-5 theirs', true, uniqueId('tpl'));
+    await service.archive(theirs.id, other.merchantId);
+
+    await expect(service.restore(theirs.id, merchant.merchantId)).rejects.toBeInstanceOf(NotFoundException);
+    await expect(service.restore('seed-template-receipt', merchant.merchantId)).rejects.toBeInstanceOf(NotFoundException);
+
+    const live = await createOwnTemplateWithName(merchant, 'F-5 not archived', true, uniqueId('tpl'));
+    await expect(service.restore(live.id, merchant.merchantId)).rejects.toBeInstanceOf(NotFoundException);
+
+    await cleanupMerchant(other);
+  });
+
+  it('listArchived is merchant-scoped — another merchant\'s archived rows never appear', async () => {
+    const other = await createScratchMerchant();
+    const theirs = await createOwnTemplateWithName(other, 'F-5 other archived', true, uniqueId('tpl'));
+    await service.archive(theirs.id, other.merchantId);
+
+    expect((await service.listArchived(merchant.merchantId)).map((x) => x.id)).not.toContain(theirs.id);
+
+    await cleanupMerchant(other);
+  });
+});

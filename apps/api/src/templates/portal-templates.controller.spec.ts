@@ -69,6 +69,8 @@ describe('PortalTemplatesController — builder routes delegate to TemplatesServ
       saveAs: jest.fn().mockResolvedValue({ id: 'tpl-saved-as' }),
       setDefault: jest.fn().mockResolvedValue({ id: 'merchant-A' }),
       archive: jest.fn().mockResolvedValue({ id: 'tpl-1' }),
+      restore: jest.fn().mockResolvedValue({ id: 'tpl-1', archivedAt: null }),
+      listArchived: jest.fn().mockResolvedValue([]),
       deleteLineage: jest.fn().mockResolvedValue({ deletedCount: 1 }),
       ...overrides,
     };
@@ -114,6 +116,26 @@ describe('PortalTemplatesController — builder routes delegate to TemplatesServ
     expect(service.archive).toHaveBeenCalledWith('tpl-1', 'merchant-A');
   });
 
+  it('restore(id, merchantId) — F-5', async () => {
+    const { controller, service } = makeController();
+    await controller.restore('tpl-1', CTX);
+    expect(service.restore).toHaveBeenCalledWith('tpl-1', 'merchant-A');
+  });
+
+  it('listArchived(merchantId) — F-5, DTO trimmed, isDefault always false', async () => {
+    const { controller, service } = makeController({
+      listArchived: jest.fn().mockResolvedValue([
+        { id: 'arc-1', name: 'Old Retail', billType: 'RECEIPT', skeleton: 'RETAIL', version: 3, layoutSchema: { huge: 'blob' }, archivedAt: new Date() },
+      ]),
+    });
+    const result = await controller.listArchived(CTX);
+    expect(service.listArchived).toHaveBeenCalledWith('merchant-A');
+    expect(result).toEqual([
+      { id: 'arc-1', name: 'Old Retail', billType: 'RECEIPT', skeleton: 'RETAIL', version: 3, isDefault: false },
+    ]);
+    expect(result.every((t) => !('layoutSchema' in t))).toBe(true);
+  });
+
   it('deleteLineage(id, merchantId)', async () => {
     const { controller, service } = makeController();
     await controller.deleteLineage('tpl-1', CTX);
@@ -142,6 +164,8 @@ const FAKE_TEMPLATES_SERVICE = {
   deleteLineage: async () => ({ deletedCount: 1 }),
   setDefault: async () => ({ id: 'merchant-A' }),
   archive: async () => ({ id: 'tpl-1' }),
+  restore: async () => ({ id: 'tpl-1', archivedAt: null }),
+  listArchived: async () => [],
 };
 
 describe('PortalTemplatesController (structural — real Nest app, real SessionGuard, W-3)', () => {
@@ -174,8 +198,10 @@ describe('PortalTemplatesController (structural — real Nest app, real SessionG
     for (const role of ['MERCHANT_ADMIN', 'STORE_STAFF']) {
       const list = await fetch(`${baseUrl}/portal/templates`, { headers: { cookie: `session=${role}` } });
       const findOne = await fetch(`${baseUrl}/portal/templates/tpl-1`, { headers: { cookie: `session=${role}` } });
+      const archived = await fetch(`${baseUrl}/portal/templates/archived`, { headers: { cookie: `session=${role}` } });
       expect(list.status).toBe(200);
       expect(findOne.status).toBe(200);
+      expect(archived.status).toBe(200);
     }
   });
 
@@ -198,6 +224,7 @@ describe('PortalTemplatesController (structural — real Nest app, real SessionG
     });
     const setDefault = await fetch(`${baseUrl}/portal/templates/tpl-1/set-default`, { method: 'POST', headers: { cookie } });
     const archive = await fetch(`${baseUrl}/portal/templates/tpl-1/archive`, { method: 'POST', headers: { cookie } });
+    const restore = await fetch(`${baseUrl}/portal/templates/tpl-1/restore`, { method: 'POST', headers: { cookie } });
     const del = await fetch(`${baseUrl}/portal/templates/tpl-1`, { method: 'DELETE', headers: { cookie } });
 
     expect(create.status).toBe(201);
@@ -205,6 +232,7 @@ describe('PortalTemplatesController (structural — real Nest app, real SessionG
     expect(saveAs.status).toBe(201);
     expect(setDefault.status).toBe(201);
     expect(archive.status).toBe(201);
+    expect(restore.status).toBe(201);
     expect(del.status).toBe(200);
   });
 
@@ -227,6 +255,7 @@ describe('PortalTemplatesController (structural — real Nest app, real SessionG
     });
     const setDefault = await fetch(`${baseUrl}/portal/templates/tpl-1/set-default`, { method: 'POST', headers: { cookie } });
     const archive = await fetch(`${baseUrl}/portal/templates/tpl-1/archive`, { method: 'POST', headers: { cookie } });
+    const restore = await fetch(`${baseUrl}/portal/templates/tpl-1/restore`, { method: 'POST', headers: { cookie } });
     const del = await fetch(`${baseUrl}/portal/templates/tpl-1`, { method: 'DELETE', headers: { cookie } });
 
     expect(create.status).toBe(403);
@@ -234,6 +263,7 @@ describe('PortalTemplatesController (structural — real Nest app, real SessionG
     expect(saveAs.status).toBe(403);
     expect(setDefault.status).toBe(403);
     expect(archive.status).toBe(403);
+    expect(restore.status).toBe(403);
     expect(del.status).toBe(403);
   });
 });

@@ -60,6 +60,25 @@ export class PortalTemplatesController {
     };
   }
 
+  // F-5 (D-65): the archived view — the merchant's archived templates, so the
+  // builder (F-8) can offer a restore. Read-tier (MERCHANT_ADMIN + STORE_STAFF,
+  // class-level default), same as list(). Declared BEFORE @Get(':id') so the
+  // literal path segment "archived" is not captured as a template id.
+  @Get('archived')
+  async listArchived(@CurrentMerchantContext() ctx: MerchantContext): Promise<PortalTemplateListItemDto[]> {
+    const templates = await this.templatesService.listArchived(ctx.merchantId);
+    return templates.map((t) => ({
+      id: t.id,
+      name: t.name,
+      billType: t.billType,
+      skeleton: t.skeleton,
+      version: t.version,
+      // An archived template is never a current default — archive() refuses the
+      // current default and setDefault() refuses an archived row.
+      isDefault: false,
+    }));
+  }
+
   // Read — same MERCHANT_ADMIN+STORE_STAFF as list() (class-level default,
   // no method-level override needed). D-47: another merchant's/nonexistent
   // id both 404 via the exact same findFirst TemplatesService already uses.
@@ -106,6 +125,16 @@ export class PortalTemplatesController {
   @Roles(UserRole.MERCHANT_ADMIN)
   async archive(@Param('id') id: string, @CurrentMerchantContext() ctx: MerchantContext) {
     return this.templatesService.archive(id, ctx.merchantId);
+  }
+
+  // F-5 (D-65): restore an archived template — clears archivedAt; F-1's
+  // allocator auto-suffixes the name to `(n)` if it has since been taken.
+  // MERCHANT_ADMIN only, like every builder write. A second merchant's id, a
+  // starter's id, or a not-currently-archived id all → 404 (D-47).
+  @Post(':id/restore')
+  @Roles(UserRole.MERCHANT_ADMIN)
+  async restore(@Param('id') id: string, @CurrentMerchantContext() ctx: MerchantContext) {
+    return this.templatesService.restore(id, ctx.merchantId);
   }
 
   // F-4 (D-64): hard-delete the entire lineage. 200 { deletedCount }.

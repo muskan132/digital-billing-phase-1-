@@ -568,6 +568,76 @@ describe('TemplatesService', () => {
     });
   });
 
+  describe('listArchived (F-5 / D-65)', () => {
+    it('queries the merchant\'s own archived head rows only', async () => {
+      templateFindMany.mockResolvedValue([]);
+      await service.listArchived(MERCHANT_ID);
+      expect(templateFindMany).toHaveBeenCalledWith({
+        where: { merchantId: MERCHANT_ID, isHead: true, archivedAt: { not: null } },
+        orderBy: { archivedAt: 'desc' },
+      });
+    });
+  });
+
+  describe('restore (F-5 / D-65)', () => {
+    const ARCHIVED = { id: 'tpl-archived', merchantId: MERCHANT_ID, name: 'Retail Bill', isHead: true, archivedAt: new Date() };
+
+    it('404 when the id is missing, out of scope, a starter, or not currently archived', async () => {
+      templateFindFirst.mockResolvedValue(null);
+      await expect(service.restore('nope', MERCHANT_ID)).rejects.toThrow(NotFoundException);
+      expect(templateUpdate).not.toHaveBeenCalled();
+      expect(templateFindFirst).toHaveBeenCalledWith({
+        where: { id: 'nope', merchantId: MERCHANT_ID, isHead: true, archivedAt: { not: null } },
+      });
+    });
+
+    it('404 on an isHead:false archived predecessor — D-75: not-head is not "the merchant\'s archive", no update issued', async () => {
+      // The lookup scopes isHead: true, so an archivePrevious-archived
+      // (isHead:false, archivedAt set) row matches zero rows -> 404.
+      templateFindFirst.mockResolvedValue(null);
+      await expect(service.restore('tpl-superseded-archived', MERCHANT_ID)).rejects.toThrow(NotFoundException);
+      expect(templateFindFirst).toHaveBeenCalledWith({
+        where: { id: 'tpl-superseded-archived', merchantId: MERCHANT_ID, isHead: true, archivedAt: { not: null } },
+      });
+      expect(templateUpdate).not.toHaveBeenCalled();
+    });
+
+    it('clears archivedAt and keeps the name when it is still free (allocator excludes the row itself)', async () => {
+      templateFindFirst.mockResolvedValueOnce(ARCHIVED); // the restore lookup
+      templateFindFirst.mockResolvedValueOnce(null); // allocateName probe: "Retail Bill" free
+      const result = await service.restore(ARCHIVED.id, MERCHANT_ID);
+      expect(templateFindFirst).toHaveBeenNthCalledWith(2, {
+        where: { merchantId: MERCHANT_ID, name: 'Retail Bill', isHead: true, id: { not: ARCHIVED.id } },
+        select: { id: true },
+      });
+      expect(templateUpdate).toHaveBeenCalledWith({
+        where: { id: ARCHIVED.id },
+        data: { archivedAt: null, name: 'Retail Bill' },
+      });
+      expect(result.archivedAt).toBeNull();
+    });
+
+    it('auto-suffixes to (1) when the name has been taken by a live head in the meantime', async () => {
+      templateFindFirst.mockResolvedValueOnce(ARCHIVED); // lookup
+      templateFindFirst.mockResolvedValueOnce({ id: 'other-head' }); // "Retail Bill" taken
+      templateFindFirst.mockResolvedValueOnce(null); // "Retail Bill (1)" free
+      await service.restore(ARCHIVED.id, MERCHANT_ID);
+      expect(templateUpdate).toHaveBeenCalledWith({
+        where: { id: ARCHIVED.id },
+        data: { archivedAt: null, name: 'Retail Bill (1)' },
+      });
+    });
+
+    it('retries on a concurrent P2002 then surfaces the named 409 after the bounded budget', async () => {
+      templateFindFirst.mockImplementation((args: { where: { archivedAt?: unknown } }) =>
+        Promise.resolve('archivedAt' in args.where ? ARCHIVED : null),
+      );
+      templateUpdate.mockRejectedValue(fakeNameP2002());
+      await expect(service.restore(ARCHIVED.id, MERCHANT_ID)).rejects.toThrow(ConflictException);
+      expect(templateUpdate).toHaveBeenCalledTimes(MAX_NAME_ALLOCATION_RETRIES);
+    });
+  });
+
   describe('deleteLineage (F-4 / D-64 / D-74)', () => {
     beforeEach(() => {
       // Target found, scoped to the session merchant, is a root (no walk-up).
