@@ -684,3 +684,14 @@ ever branches.
 **Consequence:** F-4's "no bill on any version" check builds its `templateId IN
 (…)` list from this walk. A head-only check is the named F-4 bug (D-64); the walk
 is what prevents it.
+### D-75 · Restore is scoped to head rows only — an archived non-head predecessor is not restorable
+
+**Decision:** `restore()` is scoped to `{ id, merchantId, isHead: true, archivedAt: { not: null } }`. A row with `isHead: false` — even if it carries `archivedAt` (e.g. an `archivePrevious`-archived predecessor from `save()`) — is treated as out of scope and 404s like any other unmatched id (D-47), not as "not currently archived."
+
+**Reason:** `restore()` and `listArchived()` must agree on what counts as an archived template, or a merchant could restore something they were never shown. `listArchived()` already filters to `isHead: true` (D-65) — only rows that reserved a name in the S-11 partial index and appear as one of the merchant's live archived entries. A non-head row is lineage history (a superseded version inside another template's lineage), not a distinct archivable item, and restoring it in place would not make it reappear in `list()` or `listArchived()` — it would silently become a live-but-invisible row, indistinguishable from a bug. Scoping it out entirely is more honest than restoring something into a state no view shows.
+
+This does not change D-65's auto-suffix behavior for the case D-65 actually describes — restoring a genuine archived head whose name a live head has since taken. It narrows which rows are eligible for restore at all; it does not touch how a restore is resolved once a row is eligible.
+
+**Rejected alternative:** re-heading a non-head row on restore (demote the current head, promote the restored row in its place). Rejected as out of scope for F-5 — it collides with fork-on-write's lineage semantics (a lineage has exactly one head, and swapping it is a materially different operation from clearing `archivedAt`) and would need its own decision if a future task wants "restore a specific historical version as the new head."
+
+**Consequence:** the F-5 collision test originally written for this path (restoring a non-head row into a taken name, expecting an auto-suffix) no longer applies — that row is now a 404 before any name logic runs. Replaced with a test confirming an archive()-archived head keeps its exact name and that name stays reserved (a `create()` attempt with it returns `409 TEMPLATE_NAME_TAKEN`) for as long as it's archived.
