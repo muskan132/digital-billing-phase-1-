@@ -662,3 +662,25 @@ and can simply retype the name against a clear error.
 **Reversal:** the utility-data-model phase that adds a real utility body
 block removes this UTILITY rejection, D-72's Save-As 422, and unblocks a real
 UTILITY option in F-8's skeleton picker — one coherent unlock.
+
+### D-74 · Lineage membership is a runtime parentTemplateId walk, not a stored key
+
+**Decision:** a template lineage has no root/lineage-key column. Operations that
+need every row in a lineage (F-4 delete today; F-5 restore and any future
+version-history view) compute membership at runtime by walking `parentTemplateId`
+— up to the root (`parentTemplateId IS NULL`), then breadth-first back down —
+inside the operation's transaction, with a hard row-count bound (MAX_LINEAGE).
+
+**Reason:** the chain is created linearly (fork only from head, F-1/F-2/F-3) and
+lineages are single-digit-sized, so a walk is a handful of indexed point lookups
+in one transaction — cheaper to reason about on a Tier-1 destructive path than a
+`WITH RECURSIVE` raw query, and it needs no schema change or backfill. Adding a
+`rootTemplateId` column was considered and rejected: it is a second
+representation of a fact `parentTemplateId` already holds (the D-39 pattern), it
+must be backfilled by the same walk, and nothing reads it often enough to earn an
+index. The BFS (rather than a linear chase) keeps the walk correct if a lineage
+ever branches.
+
+**Consequence:** F-4's "no bill on any version" check builds its `templateId IN
+(…)` list from this walk. A head-only check is the named F-4 bug (D-64); the walk
+is what prevents it.
