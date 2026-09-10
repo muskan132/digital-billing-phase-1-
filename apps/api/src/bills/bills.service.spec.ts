@@ -4,20 +4,6 @@ import { PrismaService } from '../prisma/prisma.service';
 import { BillsService } from './bills.service';
 import { CreateBillDto } from './dto/create-bill.dto';
 
-const MERCHANT_A = {
-  id: 'merchant_A',
-  name: 'Demo Merchant',
-  gstin: '27ABCDE1234F1Z5',
-  gstStateCode: '27',
-  defaultChannel: 'EMAIL',
-  addressLine1: '221, Linking Road',
-  addressLine2: null,
-  city: 'Mumbai',
-  pincode: '400050',
-  state: 'Maharashtra',
-};
-const MERCHANT_B_ID = 'merchant_B';
-
 const SHARED_TAX_TEMPLATE = {
   id: 'tpl-shared-tax',
   merchantId: null,
@@ -25,14 +11,25 @@ const SHARED_TAX_TEMPLATE = {
   skeleton: 'TAX_COMPLIANT',
   layoutSchema: [{ type: 'HEADER', order: 1, props: {} }],
   version: 1,
+  archivedAt: null,
   createdAt: new Date('2026-01-01T00:00:00Z'),
 };
 
-const CREATED_ORDER = {
-  id: 'order-1',
-  bill: { id: 'bill-1', templateId: SHARED_TAX_TEMPLATE.id },
-  link: { identifier: 'abcdefghij' },
+const MERCHANT_A = {
+  id: 'merchant_A',
+  name: 'Demo Merchant',
+  gstin: '27ABCDE1234F1Z5',
+  gstStateCode: '27',
+  defaultChannel: 'EMAIL',
+  // F-7 (D-77): POST /v1/bills resolves this pointer now, not a positional chain.
+  defaultTaxInvoiceTemplateId: SHARED_TAX_TEMPLATE.id,
+  addressLine1: '221, Linking Road',
+  addressLine2: null,
+  city: 'Mumbai',
+  pincode: '400050',
+  state: 'Maharashtra',
 };
+const MERCHANT_B_ID = 'merchant_B';
 
 function validDto(overrides: Partial<CreateBillDto> = {}): CreateBillDto {
   return {
@@ -82,7 +79,15 @@ describe('BillsService.createBill', () => {
 
   beforeEach(() => {
     orderFindUnique = jest.fn().mockResolvedValue(null); // no replay by default
-    orderUpsert = jest.fn().mockResolvedValue(CREATED_ORDER);
+    // Echo the resolved templateId the service put on the nested Bill create, so
+    // `template_id_used` in the response reflects real resolution (F-7).
+    orderUpsert = jest.fn().mockImplementation((args: { create?: { bill?: { create?: { templateId?: string } } } }) =>
+      Promise.resolve({
+        id: 'order-1',
+        bill: { id: 'bill-1', templateId: args.create?.bill?.create?.templateId ?? SHARED_TAX_TEMPLATE.id },
+        link: { identifier: 'abcdefghij' },
+      }),
+    );
     merchantFindUnique = jest.fn().mockResolvedValue(MERCHANT_A);
     templateFindFirst = jest.fn().mockResolvedValue(SHARED_TAX_TEMPLATE);
 
@@ -254,17 +259,109 @@ describe('BillsService.createBill', () => {
     expect(call.create.bill.create.billType).toBe('TAX_INVOICE');
   });
 
-  it('D-13 fallback: an unresolvable template_id falls back to the shared TAX_COMPLIANT template, deterministically ordered', async () => {
-    templateFindFirst
-      .mockResolvedValueOnce(null) // the requested (unknown) template_id doesn't resolve
-      .mockResolvedValueOnce(null) // no merchant-specific TAX_INVOICE template
-      .mockResolvedValueOnce(SHARED_TAX_TEMPLATE); // falls back to the shared one
+  // ---- F-7 (D-61 / D-77): direct-API template resolution contract ----------
+  describe('resolveTaxInvoiceTemplate (F-7 / D-61 / D-77)', () => {
+    it('no template_id → uses Merchant.defaultTaxInvoiceTemplateId, no template_fallback in the body', async () => {
+      templateFindFirst.mockResolvedValue(SHARED_TAX_TEMPLATE);
+      const result = await service.createBill(validDto(), MERCHANT_A.id);
 
-    const dto = validDto({ template_id: 'does-not-exist' });
-    const result = await service.createBill(dto, MERCHANT_A.id);
+      expect(result.body.template_id_used).toBe(SHARED_TAX_TEMPLATE.id);
+      expect(result.body).not.toHaveProperty('template_fallback');
+      // resolved by id, not by a createdAt-ordered scan.
+      expect(templateFindFirst).toHaveBeenCalledWith({
+        where: { id: SHARED_TAX_TEMPLATE.id, OR: [{ merchantId: MERCHANT_A.id }, { merchantId: null }] },
+      });
+      expect(templateFindFirst).not.toHaveBeenCalledWith(expect.objectContaining({ orderBy: expect.anything() }));
+    });
 
-    expect(result.body.template_id_used).toBe(SHARED_TAX_TEMPLATE.id);
-    expect(templateFindFirst).toHaveBeenNthCalledWith(2, expect.objectContaining({ orderBy: { createdAt: 'asc' } }));
-    expect(templateFindFirst).toHaveBeenNthCalledWith(3, expect.objectContaining({ orderBy: { createdAt: 'asc' } }));
+    it('own visible TAX_INVOICE template_id → used as-is, no template_fallback', async () => {
+      const ownTemplate = { ...SHARED_TAX_TEMPLATE, id: 'tpl-own-tax', merchantId: MERCHANT_A.id };
+      templateFindFirst.mockResolvedValueOnce(ownTemplate);
+      const result = await service.createBill(validDto({ template_id: 'tpl-own-tax' }), MERCHANT_A.id);
+
+      expect(result.body.template_id_used).toBe('tpl-own-tax');
+      expect(result.body).not.toHaveProperty('template_fallback');
+      // D-77: the caller-supplied lookup is scoped + archivedAt-filtered, NO billType filter.
+      expect(templateFindFirst).toHaveBeenNthCalledWith(1, {
+        where: { id: 'tpl-own-tax', archivedAt: null, OR: [{ merchantId: MERCHANT_A.id }, { merchantId: null }] },
+      });
+    });
+
+    it('an UNKNOWN template_id → 201, falls back to the default, template_fallback stated in the body', async () => {
+      templateFindFirst
+        .mockResolvedValueOnce(null) // the supplied id resolves to nothing
+        .mockResolvedValueOnce(SHARED_TAX_TEMPLATE); // the default pointer
+      const result = await service.createBill(validDto({ template_id: 'does-not-exist' }), MERCHANT_A.id);
+
+      expect(result.created).toBe(true);
+      expect(result.body.template_id_used).toBe(SHARED_TAX_TEMPLATE.id);
+      expect(result.body.template_fallback).toEqual({
+        reason: 'TEMPLATE_ID_NOT_FOUND',
+        requested_template_id: 'does-not-exist',
+      });
+      // no positional scan anywhere
+      expect(templateFindFirst).not.toHaveBeenCalledWith(expect.objectContaining({ orderBy: expect.anything() }));
+    });
+
+    it("another merchant's template_id → the SAME fallback (findFirst is scoped, returns null), never a 403, never their template", async () => {
+      // scoped lookup excludes merchant B's row → null, identical to "unknown"
+      templateFindFirst.mockResolvedValueOnce(null).mockResolvedValueOnce(SHARED_TAX_TEMPLATE);
+      const result = await service.createBill(validDto({ template_id: 'tpl-belongs-to-B' }), MERCHANT_A.id);
+
+      expect(result.created).toBe(true);
+      expect(result.body.template_id_used).toBe(SHARED_TAX_TEMPLATE.id);
+      expect(result.body.template_id_used).not.toBe('tpl-belongs-to-B');
+      expect(result.body.template_fallback).toEqual({
+        reason: 'TEMPLATE_ID_NOT_FOUND',
+        requested_template_id: 'tpl-belongs-to-B',
+      });
+    });
+
+    it('a visible RECEIPT template_id → 422 TEMPLATE_BILL_TYPE_MISMATCH, Order upsert never called (zero writes)', async () => {
+      templateFindFirst.mockResolvedValueOnce({ ...SHARED_TAX_TEMPLATE, id: 'tpl-receipt', billType: 'RECEIPT' });
+
+      await expect(service.createBill(validDto({ template_id: 'tpl-receipt' }), MERCHANT_A.id)).rejects.toMatchObject({
+        response: { error_code: 'TEMPLATE_BILL_TYPE_MISMATCH' },
+      });
+      expect(orderUpsert).not.toHaveBeenCalled();
+    });
+
+    it('null defaultTaxInvoiceTemplateId + no template_id → 422 NO_DEFAULT_TAX_INVOICE_TEMPLATE, zero writes', async () => {
+      merchantFindUnique.mockResolvedValue({ ...MERCHANT_A, defaultTaxInvoiceTemplateId: null });
+
+      await expect(service.createBill(validDto(), MERCHANT_A.id)).rejects.toMatchObject({
+        response: { error_code: 'NO_DEFAULT_TAX_INVOICE_TEMPLATE' },
+      });
+      expect(orderUpsert).not.toHaveBeenCalled();
+    });
+
+    it('null defaultTaxInvoiceTemplateId + an unknown template_id → still 422 NO_DEFAULT_TAX_INVOICE_TEMPLATE, zero writes', async () => {
+      merchantFindUnique.mockResolvedValue({ ...MERCHANT_A, defaultTaxInvoiceTemplateId: null });
+      templateFindFirst.mockResolvedValueOnce(null); // supplied id resolves to nothing
+
+      await expect(
+        service.createBill(validDto({ template_id: 'does-not-exist' }), MERCHANT_A.id),
+      ).rejects.toMatchObject({ response: { error_code: 'NO_DEFAULT_TAX_INVOICE_TEMPLATE' } });
+      expect(orderUpsert).not.toHaveBeenCalled();
+    });
+
+    it('D-27 replay: template resolution never runs on a repeated external_transaction_id', async () => {
+      orderFindUnique.mockResolvedValue({
+        id: 'order-1',
+        bill: { id: 'bill-1', templateId: SHARED_TAX_TEMPLATE.id },
+        link: { identifier: 'abcdefghij' },
+      });
+      const resolveSpy = jest.spyOn(
+        service as unknown as { resolveTaxInvoiceTemplate: () => unknown },
+        'resolveTaxInvoiceTemplate',
+      );
+
+      const result = await service.createBill(validDto({ template_id: 'anything' }), MERCHANT_A.id);
+
+      expect(result.created).toBe(false);
+      expect(result.body).not.toHaveProperty('template_fallback');
+      expect(resolveSpy).not.toHaveBeenCalled();
+      expect(templateFindFirst).not.toHaveBeenCalled();
+    });
   });
 });

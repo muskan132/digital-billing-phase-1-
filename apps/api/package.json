@@ -18,6 +18,7 @@
     "verify:w1": "ts-node scripts/verify-w1-portal-shell.ts",
     "verify:x3": "ts-node scripts/verify-x3-final-regression.ts",
     "verify:f6": "ts-node scripts/verify-f6-default-selection.ts",
+    "verify:f7": "ts-node scripts/verify-f7-direct-api-resolution.ts",
     "test": "jest"
   },
   "dependencies": {

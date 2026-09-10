@@ -1,5 +1,5 @@
 import { ForbiddenException, Injectable, Logger, UnprocessableEntityException } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { Prisma, Template } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateBillDto } from './dto/create-bill.dto';
 import { InvoiceLineInput, InvoiceResult } from './invoice-calc';
@@ -8,6 +8,15 @@ import { GstFieldMissing, GstValidationInput, validateGstFields } from './gst-va
 import { maskEmail, maskMobile } from '../common/mask.util';
 import { generateIdentifier } from '../common/link-id.util';
 
+// F-7 (D-61 / D-77): stated in the response ONLY when the caller supplied a
+// template_id that did not resolve (unknown or another merchant's) and the
+// bill fell back to Merchant.defaultTaxInvoiceTemplateId. Absent — not null —
+// on every other path (own template used as-is, or no template_id supplied).
+export interface TemplateFallback {
+  reason: 'TEMPLATE_ID_NOT_FOUND';
+  requested_template_id: string;
+}
+
 export interface CreateBillResult {
   created: boolean;
   body: {
@@ -15,6 +24,7 @@ export interface CreateBillResult {
     identifier: string;
     url: string;
     template_id_used: string;
+    template_fallback?: TemplateFallback;
   };
 }
 
@@ -135,7 +145,11 @@ export class BillsService {
       throw err;
     }
 
-    const template = await this.resolveTaxInvoiceTemplate(merchantId, dto.template_id);
+    const { template, fallback } = await this.resolveTaxInvoiceTemplate(
+      merchantId,
+      merchant.defaultTaxInvoiceTemplateId,
+      dto.template_id,
+    );
 
     const dtoLineByNo = new Map(dto.line_items.map((li) => [li.line_no, li]));
     const orderItemsData = result.lines.map((l) => {
@@ -262,42 +276,79 @@ export class BillsService {
       throw err;
     }
 
-    return { created: true, body: this.toResponseBody(order.bill!, order.link!) };
+    return { created: true, body: this.toResponseBody(order.bill!, order.link!, fallback) };
   }
 
-  // D-13, extended to TAX_INVOICE: Merchant.defaultReceiptTemplateId points at the RECEIPT
-  // template (D-13's v1 behaviour, unchanged) and can't be reused here. A caller-supplied
-  // template_id is honoured only if it resolves to a TAX_INVOICE template visible to this
-  // merchant (its own, or the shared library); otherwise, or if absent, fall back —
-  // preferring a merchant-specific TAX_INVOICE template over the shared one, each picked
-  // deterministically (createdAt asc) so the choice stays well-defined if more than one
-  // candidate ever exists.
-  private async resolveTaxInvoiceTemplate(merchantId: string, templateId: string | undefined) {
+  // F-7 (D-61 / D-77): POST /v1/bills template resolution. Supersedes D-13's
+  // "no per-order override" — an override is now part of the contract.
+  //
+  //  - A caller-supplied template_id is used only if it resolves to a VISIBLE
+  //    (own or shared library, non-archived) template. The lookup deliberately
+  //    does NOT filter on billType — an id that resolves to the wrong type must
+  //    be distinguishable from one that resolves to nothing.
+  //      * resolves, billType === TAX_INVOICE -> use it, no fallback marker.
+  //      * resolves, billType !== TAX_INVOICE -> 422 TEMPLATE_BILL_TYPE_MISMATCH,
+  //        thrown here, BEFORE any write (the upsert is further down createBill).
+  //      * does not resolve (unknown / another merchant's — D-47: never
+  //        distinguished, never a 403/404) -> fall back to the default pointer
+  //        AND state the fallback in the response.
+  //  - No template_id at all -> use the default pointer, no fallback marker
+  //    (this is the base path, not a fallback — D-13 lineage).
+  //  - Merchant.defaultTaxInvoiceTemplateId genuinely null -> 422
+  //    NO_DEFAULT_TAX_INVOICE_TEMPLATE, no write. No silent last-resort.
+  //
+  // The positional fallback chain (a scan ordered by row age) is gone entirely (D-61).
+  private async resolveTaxInvoiceTemplate(
+    merchantId: string,
+    defaultTaxInvoiceTemplateId: string | null,
+    templateId: string | undefined,
+  ): Promise<{ template: Template; fallback: TemplateFallback | null }> {
     if (templateId) {
+      // D-77: archivedAt: null — an archived template is not "visible" (D-61).
       const requested = await this.prisma.template.findFirst({
-        where: { id: templateId, billType: 'TAX_INVOICE', OR: [{ merchantId }, { merchantId: null }] },
+        where: { id: templateId, archivedAt: null, OR: [{ merchantId }, { merchantId: null }] },
       });
       if (requested) {
-        return requested;
+        if (requested.billType !== 'TAX_INVOICE') {
+          throw new UnprocessableEntityException({
+            error_code: 'TEMPLATE_BILL_TYPE_MISMATCH',
+            message: `Template ${templateId} is a ${requested.billType} template; POST /v1/bills issues TAX_INVOICE bills only.`,
+          });
+        }
+        return { template: requested, fallback: null };
       }
+      // Fell through: unknown or not-yours. Fall back to the default, and say so.
     }
 
-    const merchantSpecific = await this.prisma.template.findFirst({
-      where: { merchantId, billType: 'TAX_INVOICE' },
-      orderBy: { createdAt: 'asc' },
-    });
-    if (merchantSpecific) {
-      return merchantSpecific;
+    if (!defaultTaxInvoiceTemplateId) {
+      throw new UnprocessableEntityException({
+        error_code: 'NO_DEFAULT_TAX_INVOICE_TEMPLATE',
+        message:
+          'This merchant has no default tax-invoice template set. Set one in the portal before issuing tax invoices.',
+      });
     }
 
-    const shared = await this.prisma.template.findFirst({
-      where: { merchantId: null, billType: 'TAX_INVOICE' },
-      orderBy: { createdAt: 'asc' },
+    const dflt = await this.prisma.template.findFirst({
+      where: { id: defaultTaxInvoiceTemplateId, OR: [{ merchantId }, { merchantId: null }] },
     });
-    if (!shared) {
-      throw new Error('No TAX_INVOICE template available — seed data missing the shared TAX_COMPLIANT template');
+    // D-77 / MINOR-2: setDefault (D-76), archive (D-33/D-76) and deleteLineage
+    // (D-64) together guarantee this pointer only ever holds a live, non-archived
+    // TAX_INVOICE head. A violation is a data-integrity bug, not a caller error.
+    if (!dflt) {
+      throw new Error(
+        `Merchant ${merchantId} defaultTaxInvoiceTemplateId=${defaultTaxInvoiceTemplateId} resolves to no visible template`,
+      );
     }
-    return shared;
+    if (dflt.billType !== 'TAX_INVOICE') {
+      throw new Error(
+        `Merchant ${merchantId} defaultTaxInvoiceTemplateId=${defaultTaxInvoiceTemplateId} is a ${dflt.billType} template`,
+      );
+    }
+
+    return {
+      template: dflt,
+      fallback: templateId ? { reason: 'TEMPLATE_ID_NOT_FOUND', requested_template_id: templateId } : null,
+    };
   }
 
   // Matches P2002 only when the violated constraint names both merchantId and
@@ -315,15 +366,21 @@ export class BillsService {
     return /merchantId/i.test(joined) && /invoiceNumber/i.test(joined);
   }
 
+  // F-7 (D-77): `fallback` is threaded in only from the create path. A replay
+  // (200) calls this with no fallback arg, so the replayed body carries no
+  // `template_fallback` even if the original 201 did — the marker is a
+  // diagnostic of the creation act, not persisted (D-77, accepted asymmetry).
   private toResponseBody(
     bill: { id: string; templateId: string },
     link: { identifier: string },
+    fallback?: TemplateFallback | null,
   ): CreateBillResult['body'] {
     return {
       bill_id: bill.id,
       identifier: link.identifier,
       url: `${process.env.PUBLIC_BILL_BASE_URL ?? 'http://localhost:3000'}/${link.identifier}`,
       template_id_used: bill.templateId,
+      ...(fallback ? { template_fallback: fallback } : {}),
     };
   }
 }

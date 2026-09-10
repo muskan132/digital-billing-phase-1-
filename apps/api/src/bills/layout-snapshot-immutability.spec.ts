@@ -24,6 +24,8 @@ const MERCHANT = {
   gstin: '27ABCDE1234F1Z5',
   gstStateCode: '27',
   defaultChannel: 'EMAIL',
+  // F-7 (D-77): POST /v1/bills resolves this pointer; the DTO below sends no template_id.
+  defaultTaxInvoiceTemplateId: 'tpl-shared-tax',
   addressLine1: '221, Linking Road',
   addressLine2: null,
   city: 'Mumbai',

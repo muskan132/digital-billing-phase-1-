@@ -106,7 +106,9 @@ async function cleanupMerchant(session: ScratchSession): Promise<void> {
   await prisma.order.deleteMany({ where: { merchantId: session.merchantId } });
   await prisma.merchantSession.deleteMany({ where: { userId: session.userId } });
   await prisma.user.deleteMany({ where: { id: session.userId } });
-  await prisma.merchant.update({ where: { id: session.merchantId }, data: { defaultReceiptTemplateId: null } }).catch(() => {});
+  await prisma.merchant
+    .update({ where: { id: session.merchantId }, data: { defaultReceiptTemplateId: null, defaultTaxInvoiceTemplateId: null } })
+    .catch(() => {});
   await prisma.template.deleteMany({ where: { merchantId: session.merchantId } });
   await prisma.merchant.deleteMany({ where: { id: session.merchantId } });
 }
@@ -123,16 +125,20 @@ async function csrfToken(session: ScratchSession): Promise<string> {
 }
 
 async function createOwnTemplate(session: ScratchSession, name: string) {
+  // F-7 (D-61): this template is passed as `template_id` to POST /v1/bills, which
+  // issues TAX_INVOICE bills only — a RECEIPT id is now a 422 (was silently
+  // substituted via the removed positional chain). So the scratch template is
+  // TAX_INVOICE and it is set as the merchant's tax-invoice default.
   const template = await prisma.template.create({
     data: {
       id: uid('template'),
       merchantId: session.merchantId,
       name,
-      billType: 'RECEIPT',
-      layoutSchema: { schemaVersion: 2, skeleton: 'MINIMALIST', blocks: [] },
+      billType: 'TAX_INVOICE',
+      layoutSchema: { schemaVersion: 2, skeleton: 'TAX_COMPLIANT', blocks: [] },
     },
   });
-  await prisma.merchant.update({ where: { id: session.merchantId }, data: { defaultReceiptTemplateId: template.id } });
+  await prisma.merchant.update({ where: { id: session.merchantId }, data: { defaultTaxInvoiceTemplateId: template.id } });
   return template;
 }
 

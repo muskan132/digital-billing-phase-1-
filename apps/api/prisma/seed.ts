@@ -174,11 +174,9 @@ async function main() {
 
   // RETAIL template — docs/TEMPLATE_SYSTEM_v2.md §4.2. billType is TAX_INVOICE (not
   // RECEIPT): it needs items[]/per-line tax data, which only a TAX_INVOICE snapshot
-  // carries (BR-23). This does NOT change bills.service.ts's default-template
-  // resolution: resolveTaxInvoiceTemplate() falls back to the oldest shared
-  // TAX_INVOICE template (createdAt asc) when no template_id is given, and this row is
-  // seeded after seed-template-tax-invoice, so existing callers are unaffected. A
-  // caller gets this template only by passing template_id explicitly.
+  // carries (BR-23). Since F-7 (D-61), seed ORDERING no longer affects default
+  // resolution — POST /v1/bills reads Merchant.defaultTaxInvoiceTemplateId, not the
+  // oldest shared template. A caller gets this template only by passing template_id.
   const retailTemplateData = {
     merchantId: null,
     name: 'Retail Bill (RETAIL)',
@@ -349,10 +347,10 @@ async function main() {
   //     utility bill is not a payment receipt, and this matches the other
   //     document-style starters (RETAIL/RESTAURANT). The "is a utility bill a
   //     TAX_INVOICE or a third BillType" product ruling stays deferred (D-67) —
-  //     if it lands as a new BillType, this one row migrates. Seeded after the
-  //     other TAX_INVOICE starters, so resolveTaxInvoiceTemplate's oldest-by-
-  //     createdAt fallback is unaffected; a caller reaches this only via an
-  //     explicit template_id.
+  //     if it lands as a new BillType, this one row migrates. Since F-7 (D-61)
+  //     POST /v1/bills resolves the merchant's defaultTaxInvoiceTemplateId, not
+  //     the oldest starter, so a caller reaches this only via an explicit
+  //     template_id regardless of seed order.
   const utilityTemplateData = {
     merchantId: null,
     name: 'Utility Bill (UTILITY)',
@@ -374,9 +372,19 @@ async function main() {
     update: utilityTemplateData,
   });
 
+  // F-7 (D-61 / D-77): POST /v1/bills reads Merchant.defaultTaxInvoiceTemplateId
+  // (the positional oldest-by-createdAt fallback chain is gone). Seed it to the
+  // shared TAX_COMPLIANT starter so a no-template_id caller keeps working — the
+  // honest analog of the receipt pointer set alongside it. Re-seed restores this
+  // baseline default (same as the receipt line — neither is guarded). A
+  // genuinely null pointer (a merchant provisioned without a seed) is a
+  // 422 NO_DEFAULT_TAX_INVOICE_TEMPLATE, never a silent substitution.
   await prisma.merchant.update({
     where: { id: MERCHANT_ID },
-    data: { defaultReceiptTemplateId: TEMPLATE_RECEIPT_MINIMALIST_ID },
+    data: {
+      defaultReceiptTemplateId: TEMPLATE_RECEIPT_MINIMALIST_ID,
+      defaultTaxInvoiceTemplateId: TEMPLATE_TAX_INVOICE_ID,
+    },
   });
 
   // D-19: MerchantApiKey — keyPrefix plaintext for lookup, keyHash = SHA-256 of the full

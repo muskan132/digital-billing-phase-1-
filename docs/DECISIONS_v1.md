@@ -711,3 +711,25 @@ This does not change D-65's auto-suffix behavior for the case D-65 actually desc
 **Not in F-6, explicitly:** the direct-API (`POST /v1/bills`) read-through of `defaultTaxInvoiceTemplateId`. `resolveTaxInvoiceTemplate` still runs its positional oldest-by-`createdAt` fallback chain; replacing it — with the pointer read, `422 TEMPLATE_BILL_TYPE_MISMATCH`, and the fallback-reason field — is F-7 / D-61, a one-way door per D-27. F-6 proves only that the pointer is written correctly; F-7 proves it is read.
 
 `getDefaultTemplateId()` (receipt-only, F-2's decision) is untouched — it feeds the "Create invoice" shortcut and `list()`'s single-default DTO; F-8 reshapes `list()`'s response to carry both pointers. F-6 adds `getDefaults()` alongside rather than widening the old method, avoiding shaping that response twice.
+
+### D-77 · Direct-API template resolution — response shape and the null-default edge (executes D-61)
+
+**Decision:** `POST /v1/bills` resolves `template_id` exactly as D-61 specifies. This entry pins the five things D-61 left unspecified.
+
+**1 · Response shape.** On a fallback the body gains a nested object, absent (not `null`) on every other path:
+
+```json
+"template_fallback": { "reason": "TEMPLATE_ID_NOT_FOUND", "requested_template_id": "<what the caller sent>" }
+```
+
+`template_id_used` is unchanged — same key, same string type, same meaning (the id the bill was rendered from). Existing callers parsing only that field are unaffected; this is the one-way-door invariant (D-27/ADR-6). `reason` is a single-value enum string, not a boolean, so a future reason is additive. The marker appears only when the caller supplied a `template_id` that did not resolve (unknown, or another merchant's — never distinguished, D-47). Sending no `template_id` and getting the default is the base path (D-13 lineage), not a fallback — no marker.
+
+**2 · Null `defaultTaxInvoiceTemplateId`.** The seed sets `Merchant.defaultTaxInvoiceTemplateId = 'seed-template-tax-invoice'` (the shared TAX_COMPLIANT starter — a default may point at a starter, D-68) alongside the receipt pointer, idempotently. This is the honest analog of D-60's "no row losing its default" for the tax-invoice side, and it keeps any no-`template_id` caller (`sample-bill.json`) working. When the pointer is genuinely null (a merchant provisioned without a seed): `422 { error_code: 'NO_DEFAULT_TAX_INVOICE_TEMPLATE' }`, zero writes. No silent last-resort substitution — that is exactly the invisible-substitution failure D-61 exists to prevent, and the response's fallback marker could not honestly describe it.
+
+**3 · Replay omits the marker.** A repeated `external_transaction_id` returns 200 with the existing bill and no `template_fallback`, even if the original 201 carried one. Template resolution never runs on a replay (`createBill` checks `externalTransactionId` before it), and the marker is a diagnostic of the creation act, not persisted. Accepted asymmetry — persisting it would need an `Order` column for a field nothing reads back.
+
+**4 · The seed change.** `seed.ts` sets both default pointers in one `merchant.update`; re-seed restores this baseline (neither pointer is guarded — same as the receipt line since S-10). The stale seed comments that explained seed ordering in terms of the removed positional chain (`seed-template-retail`, `seed-template-utility`) are trimmed.
+
+**5 · `archivedAt: null` on the caller-supplied lookup.** The lookup for a caller's `template_id` is `{ id, archivedAt: null, OR: [{ merchantId }, { merchantId: null }] }` — an archived template is not "visible" (D-61), so an archived id falls back to the default like an unknown one. The default-pointer lookup is not re-filtered on `archivedAt`/`billType` — `setDefault` (D-76) + `archive()` (D-33/D-76) + `deleteLineage` (D-64) already guarantee that pointer holds a live, non-archived TAX_INVOICE head; a violation throws a plain `Error` (integrity bug), never a 422.
+
+Supersedes the last of D-13's v1 scoping. Unchanged: the JioPay callback path (`defaultReceiptTemplateId`, no override, D-61); the D-27 replay contract; `Bill.snapshot` / the D-28 whitelist.
