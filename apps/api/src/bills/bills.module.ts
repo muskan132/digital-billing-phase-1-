@@ -7,6 +7,7 @@ import { PortalBillsController } from './portal-bills.controller';
 import { PortalBillsService } from './portal-bills.service';
 import { PortalDeliveriesController } from './portal-deliveries.controller';
 import { PortalDeliveriesService } from './portal-deliveries.service';
+import { PiiExportAuditService } from './pii-export-audit.service';
 
 @Module({
   // H-1: AuthModule imported so SessionGuard (used by the portal controllers)
@@ -14,7 +15,9 @@ import { PortalDeliveriesService } from './portal-deliveries.service';
   // — it's a provider exported by AuthModule, not registered here directly.
   imports: [AuthModule],
   controllers: [BillsController, PortalBillsController, PortalDeliveriesController],
-  providers: [ApiKeyGuard, BillsService, PortalBillsService, PortalDeliveriesService],
+  // E-1 (D-70): PiiExportAuditService is registered now, unused until E-2's
+  // export route calls it. It has no controller — it is not a route (D-80).
+  providers: [ApiKeyGuard, BillsService, PortalBillsService, PortalDeliveriesService, PiiExportAuditService],
   exports: [ApiKeyGuard],
 })
 export class BillsModule {}

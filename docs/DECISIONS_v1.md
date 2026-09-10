@@ -761,3 +761,48 @@ Supersedes the last of D-13's v1 scoping. Unchanged: the JioPay callback path (`
 **6 · No pagination; a 200-row cap on `failed[]`.** A merchant's `FAILED` count should be tiny (D-7 tolerates ~9 min of outage). The cap is insurance against an unbounded `findMany`, not a page size — the `counts.FAILED` value is uncapped. Ordering: `createdAt desc` (uses `@@index([status, createdAt])`).
 
 **Unchanged:** `Bill.snapshot`, the L-2 whitelist, the public bill page, the drainer's behaviour (extracting `resolveMaxBroadcastAttempts` is a pure move — the drainer's boot-time validation test still passes).
+
+### D-79 · Resend implementation — no-body targeting, the partial index as D-69's structural rate limit, error codes
+
+**Decision:** `POST /portal/bills/:id/resend` (D-69) is implemented as follows.
+
+**1 · No request body is read.** The route has no `@Body` parameter — a recipient (or `broadcastId`, or anything) in the request is structurally unreadable, not merely ignored. This is what makes D-69's "no recipient is ever read from the request body" and R-2's "a request body carrying a recipient field has no effect" true by construction rather than by discipline.
+
+**2 · Target = the most-recent FAILED broadcast on the order.** With no `broadcastId` in the path or body, R-2 resolves the target itself: `broadcasts.filter(FAILED).sort(createdAt desc)[0]`. This is well-defined because P-1/P-2 create exactly one broadcast per order (via `Merchant.defaultChannel`), so every later FAILED row for that order is a prior resend to the same channel+recipient — "most recent FAILED" and "any FAILED" resolve to the identical destination. The new row copies `channel` and the stored raw `recipient` from that row.
+
+**3 · The partial unique index is D-69's "structural" rate limit.** D-69 calls "at most one delivery in flight per order" structural.
+
+`migrations/20260910200000_r2_broadcast_one_pending_per_order/`:
+```sql
+CREATE UNIQUE INDEX "Broadcast_orderId_pending_key" ON "Broadcast" ("orderId") WHERE "status" = 'PENDING';
+```
+
+Hand-written SQL (Prisma v6 can't express a partial unique index — S-11 precedent; `schema.prisma` carries only a comment, the index will not round-trip through a future `migrate dev`). Safe against every existing writer: P-1/P-2 create exactly one PENDING per order at order-creation, the drainer only UPDATEs. R-2's `resend()` runs a COUNT-based pre-check for the friendly 422, and catches the index's `P2002` (a concurrent double-click that beat the pre-check) as the same `422 RESEND_ALREADY_PENDING` — indistinguishable to the caller. SENT/FAILED rows are unconstrained (D-6's append-only queue, D-7's retry history).
+
+**4 · Stable error codes.** `RESEND_ALREADY_PENDING` (a PENDING broadcast exists for the order — checked at order scope, any channel, any recipient, per D-69) and `NO_FAILED_BROADCAST` (no FAILED row on the order — covers both "only SENT" and "no broadcasts at all", one code, one message). Both carry a human message (F-8's "surface the server's named error verbatim" depends on this). Cross-merchant / nonexistent `billId` → `404` (D-47), no distinguishing body.
+
+**5 · Response:** `{ resent: true, channel }` — `channel` is non-PII (tells the UI "re-queued the email/SMS"); no recipient, masked or otherwise. `201` (Nest default). `resend()` lives on `PortalDeliveriesService` (broadcast domain), the whole thing in one `$transaction`.
+
+**6 · `attempts` is not a gate (NIT-2).** A FAILED row is resendable regardless of its `attempts` count — even one still below `MAX_BROADCAST_ATTEMPTS` that the drainer would retry on its own. The merchant asking explicitly is a distinct signal from the drainer's schedule (D-69's whole rationale for a new row over a retry). This is deliberate, not a missing check.
+
+**7 · No new send logic.** `resend()` writes `status: PENDING, attempts: 0` — a row matching the drainer's candidate query (first branch, backoff-exempt). The existing `@Cron` drainer delivers it on its next tick. D-69: "Neither changes the drainer." The old FAILED row is only ever read — never updated, never deleted — preserving the failure history R-1 surfaces.
+
+### D-80 · PiiExportAudit write path — PiiExportAuditService.record(), a service not a route
+
+**Decision:** E-1 builds `PiiExportAuditService.record(input)` — one method, no controller, no route. E-2's `GET /portal/bills/export.csv` is the only caller.
+
+**1 · Service, not a route.** `record()` is a reusable primitive. Any export path (E-2, or a future per-customer export) must call it before producing PII output; forgetting to is a compliance hole with no compile-time signal, so the D-70 sequencing (E-1 ships before E-2, no export path without it) is the guard.
+
+**2 · commit == promise-resolved is the sequencing primitive.** A single Prisma `create` is its own implicit transaction; `record()`'s promise resolving is the commit. No explicit `$transaction` wrapper (it adds nothing for one write and holds a connection longer). E-2's obligation: `await auditService.record(...)` to completion, then stream the first CSV byte; if `record()` rejects, refuse the export entirely (500, zero bytes) — D-48's "precondition": no committed audit row, no export.
+
+**3 · E-1's verify is the weak form; the full guarantee is E-2's.** E-1 asserts only "a committed audit row survives a subsequent thrown error in the same flow." The full "a forced failure after the audit commit leaves an orphan row and no file" requires the streaming path and is E-2's to prove end to end — E-1 has no export to fail. The E-1 roadmap verify line is read as the partial form.
+
+**4 · The filters JSON contract (`ExportAuditFilters`).** `{ dateFrom?: string; dateTo?: string; billType?: string; source?: string }` — plain strings, the values the merchant actually asked for, `{}` when no filters were applied (the column is non-nullable). E-2 maps its parsed query to this shape; E-1 stores it verbatim. E-1 defines neither the filter semantics nor the query — a compliance reader and E-2 agree on this exact shape.
+
+**5 · `rowCount` = "the count of data rows the caller declares it exported."** E-1 records it faithfully and does not compute it — E-2 owns the merchant-scoped, filter-matched bill query and passes the count. No duplication of H-1's where-builder in E-1. `rowCount: 0` is valid (an empty export is still an audited egress act). Backstop validation: non-negative integer or throw, no row written.
+
+**6 · No authorization here.** `record()` records whatever principal it is handed (`merchantId`, `userId` as typed scalars, sourced by E-2 from `MerchantContext` — never a request field). The `MERCHANT_ADMIN`-only gate is E-2's route (`@Roles`, per D-71). A future export route that forgets its own `@Roles` would write audit rows for a `STORE_STAFF` export — E-1 trusts its caller. Backstop validation: `contactProjection` ∈ `{masked, full}` or throw.
+
+**7 · Append-only is enforced locally by absence of code paths only** (D-70's accepted gap — DB-level `REVOKE` is Compliance's, deferred). The enforcement is three tests that stay green forever: a method-surface assertion (`PiiExportAuditService.prototype` exposes exactly `record`), a repo-wide grep over production `.ts` (no `piiExportAudit.{update,updateMany,delete,deleteMany,upsert}` — `*.spec.ts` excluded, since integration teardown must delete its own scratch rows past the `ON DELETE RESTRICT` FKs), and a schema assertion (`PiiExportAudit` has no `@updatedAt`). A migration adding a mutation path, or an update method anywhere, trips these.
+
+**Module:** registered in `bills.module.ts` (export is bill-history-adjacent; E-2's controller lands there). `record()` returns `{ id, createdAt }` so E-2 can assert "exactly one row, this id."
