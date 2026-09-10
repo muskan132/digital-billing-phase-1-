@@ -733,3 +733,31 @@ This does not change D-65's auto-suffix behavior for the case D-65 actually desc
 **5 · `archivedAt: null` on the caller-supplied lookup.** The lookup for a caller's `template_id` is `{ id, archivedAt: null, OR: [{ merchantId }, { merchantId: null }] }` — an archived template is not "visible" (D-61), so an archived id falls back to the default like an unknown one. The default-pointer lookup is not re-filtered on `archivedAt`/`billType` — `setDefault` (D-76) + `archive()` (D-33/D-76) + `deleteLineage` (D-64) already guarantee that pointer holds a live, non-archived TAX_INVOICE head; a violation throws a plain `Error` (integrity bug), never a 422.
 
 Supersedes the last of D-13's v1 scoping. Unchanged: the JioPay callback path (`defaultReceiptTemplateId`, no override, D-61); the D-27 replay contract; `Bill.snapshot` / the D-28 whitelist.
+
+### D-78 · GET /portal/deliveries — response envelope, and billId alongside D-48's contact whitelist
+
+**Decision:** R-1's `GET /portal/deliveries` returns a fixed three-key envelope:
+
+```json
+{
+  "counts":      { "PENDING": 1, "SENT": 3, "FAILED": 2 },
+  "maxAttempts": 5,
+  "failed":      [ { "channel": "...", "status": "FAILED", "attempts": 5, "sentAt": null, "recipientMasked": "...", "billId": "..." } ]
+}
+```
+
+`counts` is zero-filled — every status present even at 0. `maxAttempts` is top-level, not per-item. `failed[]` items carry exactly six keys.
+
+**1 · Zero-filled counts.** `prisma.broadcast.groupBy({ by: ['status'], where: { order: { merchantId } } })` returns only statuses that have ≥1 row; the serializer overlays them onto `{ PENDING: 0, SENT: 0, FAILED: 0 }`. So the response always carries all three, and it reconciles exactly to `SELECT status, count(*) FROM "Broadcast" b JOIN "Order" o ON b."orderId"=o.id WHERE o."merchantId"=$1 GROUP BY status` (which simply omits the zero rows). `Broadcast` has no `merchantId` column — every query in this service is scoped through the relation filter `order: { merchantId }` (`Broadcast.orderId` → `Order.merchantId`).
+
+**2 · `maxAttempts` is top-level, not a per-item field.** It is one config constant — the D-7 retry ceiling the drainer enforces — read from the single shared source `resolveMaxBroadcastAttempts()` (extracted from `broadcast-drainer.service.ts` to `broadcast-max-attempts.util.ts`, so the two call sites cannot drift). `attempts >= maxAttempts` on a `FAILED` row means the drainer has permanently given up (D-69: "R-1 makes them visible"); below it, still retrying. Putting it top-level keeps the per-item DTO at exactly D-48's field count.
+
+**3 · `billId` on the failed item is NOT a D-48 violation.** D-48's whitelist bounds contact/PII exposure — it is a rule about `recipient` and customer identifiers, not about every field on the DTO. `billId` is a foreign key: it carries no PII, appears already on every `/portal/bills` response a `STORE_STAFF` can read, and exists solely so the failed-deliveries list can link to `/portal/bills/:id`, where R-2's resend lives — the "R-1 visible → R-2 actionable" pipeline D-69 describes needs that link. The key-set test therefore asserts exactly `{channel, status, attempts, sentAt, recipientMasked, billId}` — six keys — and explicitly bans `recipient`, `error`, `id`, `orderId`, `order`. The distinction this decision draws: D-48 forbids a second copy of contact data, not a reference to the bill it belongs to.
+
+**4 · Masking reuses H-3's `maskBroadcastRecipient(channel, recipient)`** (`EMAIL` → `maskEmailPortal`, else → `maskMobilePortal`), extracted to `portal-contact-mask.util.ts` and imported by both `PortalBillsService.findOne` and `PortalDeliveriesService`. No new masking logic. `Broadcast.error` (which stores a log-masked recipient) is never selected.
+
+**5 · Read-tier, `MERCHANT_ADMIN` + `STORE_STAFF`** — same as `/portal/bills` (D-50). The masked recipient shown here is a strict subset of what `STORE_STAFF` already sees in the bill list/detail. The write action (R-2 resend) is `MERCHANT_ADMIN` only; that asymmetry is R-2's.
+
+**6 · No pagination; a 200-row cap on `failed[]`.** A merchant's `FAILED` count should be tiny (D-7 tolerates ~9 min of outage). The cap is insurance against an unbounded `findMany`, not a page size — the `counts.FAILED` value is uncapped. Ordering: `createdAt desc` (uses `@@index([status, createdAt])`).
+
+**Unchanged:** `Bill.snapshot`, the L-2 whitelist, the public bill page, the drainer's behaviour (extracting `resolveMaxBroadcastAttempts` is a pure move — the drainer's boot-time validation test still passes).

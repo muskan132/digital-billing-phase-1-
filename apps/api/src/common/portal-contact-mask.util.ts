@@ -25,3 +25,12 @@ export function maskEmailPortal(email: string | undefined | null): string | null
   const maskedLocal = local.length <= 1 ? '*' : local[0] + '*'.repeat(local.length - 1);
   return `${maskedLocal}@${domain}`;
 }
+
+// H-3 / R-1: mask a Broadcast.recipient by its channel — EMAIL through the
+// email mask, SMS (or anything else) through the mobile mask. The one place
+// this dispatch lives; both PortalBillsService.findOne (H-3) and
+// PortalDeliveriesService (R-1) import it, so the FAILED-delivery list and the
+// bill-detail broadcasts list can never mask the same value two different ways.
+export function maskBroadcastRecipient(channel: 'EMAIL' | 'SMS' | string, recipient: string): string | null {
+  return channel === 'EMAIL' ? maskEmailPortal(recipient) : maskMobilePortal(recipient);
+}

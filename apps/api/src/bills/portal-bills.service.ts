@@ -5,7 +5,7 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { BillType, BroadcastStatus, Channel, OrderSource, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { maskEmailPortal, maskMobilePortal } from '../common/portal-contact-mask.util';
+import { maskBroadcastRecipient, maskEmailPortal, maskMobilePortal } from '../common/portal-contact-mask.util';
 import { decodeCursor, encodeCursor } from './portal-bills-cursor.util';
 
 export const PORTAL_BILLS_DEFAULT_LIMIT = 20;
@@ -120,10 +120,6 @@ export interface PortalBillDetailDto {
   customerMobile: string | null;
   customerEmail: string | null;
   broadcasts: PortalBillBroadcastDto[];
-}
-
-function maskBroadcastRecipient(channel: Channel, recipient: string): string | null {
-  return channel === Channel.EMAIL ? maskEmailPortal(recipient) : maskMobilePortal(recipient);
 }
 
 // D-48's detail whitelist, enforced at this one construction site — the

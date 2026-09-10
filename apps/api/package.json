@@ -20,6 +20,7 @@
     "verify:f6": "ts-node scripts/verify-f6-default-selection.ts",
     "verify:f7": "ts-node scripts/verify-f7-direct-api-resolution.ts",
     "verify:f8": "ts-node scripts/verify-f8-templates-list-ui.ts",
+    "verify:r1": "ts-node scripts/verify-r1-delivery-visibility.ts",
     "test": "jest"
   },
   "dependencies": {

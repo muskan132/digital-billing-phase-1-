@@ -53,6 +53,7 @@ export default async function PortalLayout({ children }: { children: React.React
               <a href="/portal">Dashboard</a>
               <a href="/portal/templates">Templates</a>
               <a href="/portal/bills">Bills</a>
+              <a href="/portal/deliveries">Deliveries</a>
             </nav>
             <div className="portal-nav-account">
               <span className="portal-nav-merchant">{me.merchantName}</span>

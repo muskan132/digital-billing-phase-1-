@@ -3,12 +3,11 @@ import { Cron } from '@nestjs/schedule';
 import { BroadcastStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { BroadcastSenderService } from './broadcast-sender.service';
-
-const DEFAULT_MAX_ATTEMPTS = 5;
+import { resolveMaxBroadcastAttempts } from './broadcast-max-attempts.util';
 
 // D-7 backoff, indexed by `attempts` (seconds to wait since the last attempt before the
 // next retry is eligible). Sum ≈ 520s (~8.7 min) of tolerated downstream outage before a
-// row permanently exhausts DEFAULT_MAX_ATTEMPTS.
+// row permanently exhausts the max attempt count.
 const BACKOFF_SECONDS = [10, 30, 60, 120, 300];
 
 function isBackoffElapsed(row: { attempts: number; updatedAt: Date }): boolean {
@@ -16,22 +15,10 @@ function isBackoffElapsed(row: { attempts: number; updatedAt: Date }): boolean {
   return Date.now() - row.updatedAt.getTime() >= waitSeconds * 1000;
 }
 
-// Boot-time validation: a misconfigured value must fail loudly, not silently compute
-// NaN/0 and disable retries with no log line.
-function resolveMaxAttempts(): number {
-  const raw = process.env.MAX_BROADCAST_ATTEMPTS;
-  if (raw === undefined) return DEFAULT_MAX_ATTEMPTS;
-  const parsed = Number(raw);
-  if (!Number.isInteger(parsed) || parsed <= 0) {
-    throw new Error(`MAX_BROADCAST_ATTEMPTS must be a positive integer, got: "${raw}"`);
-  }
-  return parsed;
-}
-
 @Injectable()
 export class BroadcastDrainerService {
   private readonly logger = new Logger(BroadcastDrainerService.name);
-  private readonly maxAttempts = resolveMaxAttempts();
+  private readonly maxAttempts = resolveMaxBroadcastAttempts();
 
   // Guards against two ticks draining concurrently: @nestjs/schedule does not await or
   // track a previous invocation before firing the next one, and a batch can take up to

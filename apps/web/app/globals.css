@@ -1159,3 +1159,84 @@ a.portal-templates-row-name:hover {
   font-weight: 600;
   cursor: pointer;
 }
+
+/* ==================== Portal deliveries (R-1) ==================== */
+.portal-deliveries-title {
+  font-size: 22px;
+  margin: 0 0 16px;
+}
+
+.portal-deliveries-error {
+  color: var(--semantic-error);
+  font-size: 14px;
+}
+
+.portal-deliveries-tiles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+.portal-deliveries-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 96px;
+  padding: 12px 16px;
+  border: 1px solid var(--hairline);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.portal-deliveries-tile--failed .portal-deliveries-tile-n {
+  color: var(--semantic-error);
+}
+
+.portal-deliveries-tile-n {
+  font-size: 22px;
+  font-weight: 600;
+}
+
+.portal-deliveries-tile-label {
+  font-size: 12px;
+  color: var(--slate);
+}
+
+.portal-deliveries-section-title {
+  font-size: 16px;
+  margin: 0 0 8px;
+}
+
+.portal-deliveries-empty {
+  color: var(--slate);
+  font-size: 13px;
+  margin: 8px 0 0;
+}
+
+.portal-deliveries-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.portal-deliveries-table th,
+.portal-deliveries-table td {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.portal-deliveries-table th {
+  color: var(--slate);
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.portal-deliveries-table a {
+  color: var(--ink);
+}
+
+.portal-deliveries-exhausted {
+  color: var(--semantic-error);
+}
