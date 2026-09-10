@@ -66,3 +66,9 @@ export async function proxyPortalTemplateCreate(body: unknown): Promise<NextResp
 export async function proxyPortalTemplateDelete(templateId: string): Promise<NextResponse> {
   return proxyPortal('DELETE', `/portal/templates/${encodeURIComponent(templateId)}`);
 }
+
+// R-2 (D-69/D-79): resend a FAILED delivery — `POST /portal/bills/:id/resend`,
+// no request body (the API route reads none). Same session-cookie + CSRF proxy.
+export async function proxyPortalBillResend(billId: string): Promise<NextResponse> {
+  return proxyPortal('POST', `/portal/bills/${encodeURIComponent(billId)}/resend`);
+}

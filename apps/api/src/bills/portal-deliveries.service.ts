@@ -1,13 +1,34 @@
 // R-1 / D-48 / D-78: GET /portal/deliveries — per-merchant broadcast status
-// counts + a whitelisted list of FAILED deliveries. Read-only; separate from
-// the drainer (which owns the queue) and from PortalBillsService (bill facts).
-// This file deliberately emits no diagnostic output of any kind — the R-1
-// deny-test scans it and fails on any such reference.
-import { Injectable } from '@nestjs/common';
-import { BroadcastStatus, Channel } from '@prisma/client';
+// counts + a whitelisted list of FAILED deliveries.
+// R-2 / D-69 / D-79: POST /portal/bills/:id/resend — re-queue a FAILED delivery
+// as a NEW Broadcast row for the drainer to pick up.
+// Separate from the drainer (which owns the queue) and from PortalBillsService
+// (bill facts). This file deliberately emits no diagnostic output of any kind —
+// the R-1 deny-test scans it and fails on any such reference.
+import { Injectable, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
+import { BroadcastStatus, Channel, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { maskBroadcastRecipient } from '../common/portal-contact-mask.util';
 import { resolveMaxBroadcastAttempts } from '../broadcast/broadcast-max-attempts.util';
+
+// R-2 / D-79: stable error codes — F-8's "surface the server's named error
+// verbatim" pattern depends on these not changing.
+export const RESEND_ALREADY_PENDING = 'RESEND_ALREADY_PENDING';
+export const NO_FAILED_BROADCAST = 'NO_FAILED_BROADCAST';
+
+// Matches the P2002 from the partial unique index Broadcast_orderId_pending_key
+// (migration 20260910200000) — a concurrent resend double-click that beat the
+// app-level PENDING count check. Deliberately narrow, same discipline as
+// templates.service's isTemplateNameConflict.
+function isPendingBroadcastConflict(err: unknown): boolean {
+  if (!(err instanceof Prisma.PrismaClientKnownRequestError) || err.code !== 'P2002') {
+    return false;
+  }
+  const target = err.meta?.target;
+  const fields = Array.isArray(target) ? target.map(String) : typeof target === 'string' ? [target] : [];
+  const joined = fields.join('|');
+  return /orderId/i.test(joined) && /pending/i.test(joined);
+}
 
 // No pagination (a merchant's FAILED count should be tiny — D-7 tolerates only
 // ~9 min of outage before a row exhausts). This cap is insurance against an
@@ -105,5 +126,87 @@ export class PortalDeliveriesService {
       maxAttempts: resolveMaxBroadcastAttempts(),
       failed: failedRows.map(toFailedItemDto),
     };
+  }
+
+  // R-2 / D-69 / D-79: re-queue a FAILED delivery. Reads NO request body — the
+  // route has no @Body param, so a `recipient` (or anything) in the request is
+  // structurally unreadable. Creates ONE new Broadcast row (status PENDING,
+  // attempts 0) copying channel + the STORED raw recipient from the order's
+  // most-recent FAILED broadcast; the old row is only ever read, never touched.
+  // The existing @Cron drainer picks the new row up on its next tick — no new
+  // send logic (D-69: "Neither changes the drainer").
+  //
+  // One transaction: scoped lookup -> PENDING check -> FAILED target -> create.
+  // The count check is the friendly path; the partial unique index
+  // Broadcast_orderId_pending_key is the structural backstop for a concurrent
+  // double-click, its P2002 mapped to the SAME 422 (D-79).
+  async resend(merchantId: string, billId: string): Promise<{ resent: true; channel: Channel }> {
+    return this.prisma.$transaction(async (tx) => {
+      // D-47: id AND merchantId in the same query — a cross-merchant billId and
+      // a nonexistent one both come back null and both 404, no distinguishing body.
+      const bill = await tx.bill.findFirst({
+        where: { id: billId, merchantId },
+        select: {
+          order: {
+            select: {
+              id: true,
+              broadcasts: { select: { channel: true, recipient: true, status: true, createdAt: true } },
+            },
+          },
+        },
+      });
+      if (!bill) {
+        throw new NotFoundException();
+      }
+
+      const broadcasts = bill.order.broadcasts;
+
+      // D-69: "at most one delivery in flight per order" — scope is the ORDER,
+      // any channel, any recipient.
+      if (broadcasts.some((b) => b.status === BroadcastStatus.PENDING)) {
+        throw new UnprocessableEntityException({
+          error_code: RESEND_ALREADY_PENDING,
+          message: 'A delivery for this bill is already in progress. Wait for it to finish before resending.',
+        });
+      }
+
+      // D-79: the target is the MOST-RECENT FAILED row. `attempts` is NOT a gate
+      // — the merchant asking is a distinct signal from the drainer's own retry
+      // schedule (D-69). One channel per order in practice, so "most recent" and
+      // "any" FAILED resolve to the same destination.
+      const failed = broadcasts
+        .filter((b) => b.status === BroadcastStatus.FAILED)
+        .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0];
+      if (!failed) {
+        throw new UnprocessableEntityException({
+          error_code: NO_FAILED_BROADCAST,
+          message: 'This bill has no failed delivery to resend.',
+        });
+      }
+
+      try {
+        await tx.broadcast.create({
+          data: {
+            orderId: bill.order.id,
+            channel: failed.channel,
+            recipient: failed.recipient, // STORED raw value — never from the request
+            status: BroadcastStatus.PENDING,
+            attempts: 0,
+          },
+        });
+      } catch (err) {
+        if (isPendingBroadcastConflict(err)) {
+          // Concurrent double-click — the partial index caught what the count
+          // check above missed. Same 422, indistinguishable to the caller.
+          throw new UnprocessableEntityException({
+            error_code: RESEND_ALREADY_PENDING,
+            message: 'A delivery for this bill is already in progress. Wait for it to finish before resending.',
+          });
+        }
+        throw err;
+      }
+
+      return { resent: true as const, channel: failed.channel };
+    });
   }
 }

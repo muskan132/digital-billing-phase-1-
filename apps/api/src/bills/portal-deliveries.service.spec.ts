@@ -1,3 +1,5 @@
+import { NotFoundException, UnprocessableEntityException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { PortalDeliveriesService } from './portal-deliveries.service';
 
@@ -160,5 +162,116 @@ describe('PortalDeliveriesService — logging deny-test (R-1 / D-48 "never logge
     } finally {
       spies.forEach((s) => s.mockRestore());
     }
+  });
+});
+
+// ---- R-2 / D-69 / D-79: resend ------------------------------------------
+const D = (iso: string) => new Date(iso);
+
+function makeResendService(bill: unknown) {
+  const findFirst = jest.fn().mockResolvedValue(bill);
+  const create = jest.fn().mockResolvedValue({ id: 'new-broadcast' });
+  const tx = { bill: { findFirst }, broadcast: { create } };
+  const $transaction = jest.fn().mockImplementation((cb: (t: unknown) => unknown) => cb(tx));
+  const service = new PortalDeliveriesService({ $transaction } as unknown as PrismaService);
+  return { service, findFirst, create };
+}
+
+function billWith(broadcasts: Array<Record<string, unknown>>) {
+  return { order: { id: 'order-1', broadcasts } };
+}
+
+describe('PortalDeliveriesService.resend (R-2)', () => {
+  it('creates ONE new PENDING/attempts:0 row copying channel + STORED recipient from the FAILED row; returns { resent, channel }', async () => {
+    const { service, create } = makeResendService(
+      billWith([{ channel: 'EMAIL', recipient: RAW_EMAIL, status: 'FAILED', createdAt: D('2026-09-01T00:00:00Z') }]),
+    );
+
+    const result = await service.resend(MERCHANT_ID, 'bill-1');
+
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(create).toHaveBeenCalledWith({
+      data: { orderId: 'order-1', channel: 'EMAIL', recipient: RAW_EMAIL, status: 'PENDING', attempts: 0 },
+    });
+    expect(result).toEqual({ resent: true, channel: 'EMAIL' });
+    // deny: response body carries no recipient at all
+    expect(JSON.stringify(result)).not.toContain(RAW_EMAIL);
+  });
+
+  it('the new row matches the drainer candidate query — status PENDING (first branch), attempts 0 (backoff-exempt)', async () => {
+    const { service, create } = makeResendService(
+      billWith([{ channel: 'SMS', recipient: RAW_MOBILE, status: 'FAILED', createdAt: D('2026-09-01T00:00:00Z') }]),
+    );
+    await service.resend(MERCHANT_ID, 'bill-1');
+    const data = (create.mock.calls[0][0] as { data: Record<string, unknown> }).data;
+    expect(data.status).toBe('PENDING');
+    expect(data.attempts).toBe(0);
+  });
+
+  it('targets the MOST-RECENT FAILED row when there are several (all same destination in practice)', async () => {
+    const { service, create } = makeResendService(
+      billWith([
+        { channel: 'EMAIL', recipient: 'old@example.com', status: 'FAILED', createdAt: D('2026-09-01T00:00:00Z') },
+        { channel: 'EMAIL', recipient: 'newest@example.com', status: 'FAILED', createdAt: D('2026-09-03T00:00:00Z') },
+        { channel: 'EMAIL', recipient: 'mid@example.com', status: 'FAILED', createdAt: D('2026-09-02T00:00:00Z') },
+      ]),
+    );
+    await service.resend(MERCHANT_ID, 'bill-1');
+    expect((create.mock.calls[0][0] as { data: { recipient: string } }).data.recipient).toBe('newest@example.com');
+  });
+
+  it('attempts count is NOT a gate — a FAILED row well below maxAttempts still resends (D-79 NIT-2)', async () => {
+    const { service, create } = makeResendService(
+      billWith([{ channel: 'EMAIL', recipient: RAW_EMAIL, status: 'FAILED', attempts: 1, createdAt: D('2026-09-01T00:00:00Z') }]),
+    );
+    await service.resend(MERCHANT_ID, 'bill-1');
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses with 422 RESEND_ALREADY_PENDING while ANY PENDING exists for the order — no create', async () => {
+    const { service, create } = makeResendService(
+      billWith([
+        { channel: 'SMS', recipient: RAW_MOBILE, status: 'PENDING', createdAt: D('2026-09-02T00:00:00Z') },
+        { channel: 'EMAIL', recipient: RAW_EMAIL, status: 'FAILED', createdAt: D('2026-09-01T00:00:00Z') },
+      ]),
+    );
+    const err = await service.resend(MERCHANT_ID, 'bill-1').catch((e) => e);
+    expect(err).toBeInstanceOf(UnprocessableEntityException);
+    expect((err as UnprocessableEntityException).getResponse()).toMatchObject({ error_code: 'RESEND_ALREADY_PENDING' });
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('refuses with 422 NO_FAILED_BROADCAST when only SENT broadcasts exist — no create', async () => {
+    const { service, create } = makeResendService(
+      billWith([{ channel: 'EMAIL', recipient: RAW_EMAIL, status: 'SENT', createdAt: D('2026-09-01T00:00:00Z') }]),
+    );
+    const err = await service.resend(MERCHANT_ID, 'bill-1').catch((e) => e);
+    expect((err as UnprocessableEntityException).getResponse()).toMatchObject({ error_code: 'NO_FAILED_BROADCAST' });
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('refuses with 422 NO_FAILED_BROADCAST when there are no broadcasts at all', async () => {
+    const { service } = makeResendService(billWith([]));
+    const err = await service.resend(MERCHANT_ID, 'bill-1').catch((e) => e);
+    expect((err as UnprocessableEntityException).getResponse()).toMatchObject({ error_code: 'NO_FAILED_BROADCAST' });
+  });
+
+  it('404 (NotFoundException) when the bill is not this merchant\'s / does not exist — no create', async () => {
+    const { service, findFirst, create } = makeResendService(null);
+    await expect(service.resend(MERCHANT_ID, 'nope')).rejects.toBeInstanceOf(NotFoundException);
+    expect(findFirst).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'nope', merchantId: MERCHANT_ID } }));
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('maps the partial-index P2002 (concurrent double-click) to the SAME 422 RESEND_ALREADY_PENDING', async () => {
+    const { service, create } = makeResendService(
+      billWith([{ channel: 'EMAIL', recipient: RAW_EMAIL, status: 'FAILED', createdAt: D('2026-09-01T00:00:00Z') }]),
+    );
+    create.mockRejectedValueOnce(
+      new Prisma.PrismaClientKnownRequestError('unique', { code: 'P2002', clientVersion: 't', meta: { target: 'Broadcast_orderId_pending_key' } }),
+    );
+    const err = await service.resend(MERCHANT_ID, 'bill-1').catch((e) => e);
+    expect(err).toBeInstanceOf(UnprocessableEntityException);
+    expect((err as UnprocessableEntityException).getResponse()).toMatchObject({ error_code: 'RESEND_ALREADY_PENDING' });
   });
 });

@@ -281,4 +281,10 @@ model Broadcast {
   sentAt    DateTime?
 
   @@index([status, createdAt])
+  // R-2 (D-69/D-79): a PARTIAL unique index
+  //   CREATE UNIQUE INDEX "Broadcast_orderId_pending_key" ON "Broadcast" ("orderId") WHERE "status" = 'PENDING'
+  // enforces "at most one delivery in flight per order". Prisma v6 cannot
+  // express a partial unique index, so it lives ONLY in
+  // migrations/20260910200000_r2_broadcast_one_pending_per_order/ — a future
+  // `prisma migrate dev` will not see it and would drop it (S-11 precedent).
 }

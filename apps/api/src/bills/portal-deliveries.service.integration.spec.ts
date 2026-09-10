@@ -209,3 +209,160 @@ describe('PortalDeliveriesService.getDeliveries (real DB)', () => {
     }
   });
 });
+
+// ---- R-2 / D-69 / D-79: resend (real DB) --------------------------------
+async function createBill(m: Scratch, orderId: string): Promise<string> {
+  const billId = uid('bill');
+  await prisma.bill.create({ data: { id: billId, orderId, merchantId: m.merchantId, billType: 'RECEIPT', templateId: m.templateId, totalPaise: 100n, snapshot: {} } });
+  return billId;
+}
+
+async function addBroadcastRow(orderId: string, opts: { status: BroadcastStatus; channel?: 'EMAIL' | 'SMS'; recipient?: string; attempts?: number }) {
+  return prisma.broadcast.create({
+    data: {
+      orderId,
+      channel: opts.channel ?? 'EMAIL',
+      recipient: opts.recipient ?? 'someone@example.com',
+      status: opts.status,
+      attempts: opts.attempts ?? 0,
+      ...(opts.status === 'SENT' ? { sentAt: new Date() } : {}),
+    },
+  });
+}
+
+describe('PortalDeliveriesService.resend (real DB)', () => {
+  it('THE one-new-row + old-row-byte-identical test — resend on a FAILED broadcast', async () => {
+    const m = await createScratchMerchant();
+    try {
+      const orderId = await createOrder(m);
+      const billId = await createBill(m, orderId);
+      const failed = await addBroadcastRow(orderId, { status: 'FAILED', channel: 'EMAIL', recipient: 'cust-r2@example.com', attempts: 5 });
+
+      const before = await prisma.broadcast.findUniqueOrThrow({ where: { id: failed.id } });
+      const countBefore = await prisma.broadcast.count({ where: { orderId } });
+
+      const result = await service.resend(m.merchantId, billId);
+      expect(result).toEqual({ resent: true, channel: 'EMAIL' });
+
+      // exactly one new row
+      expect(await prisma.broadcast.count({ where: { orderId } })).toBe(countBefore + 1);
+
+      // the OLD row is byte-identical — every column, including attempts / error / updatedAt
+      const after = await prisma.broadcast.findUniqueOrThrow({ where: { id: failed.id } });
+      expect(after).toEqual(before);
+
+      // the NEW row: PENDING, attempts 0, channel + STORED recipient copied
+      const fresh = await prisma.broadcast.findFirstOrThrow({ where: { orderId, id: { not: failed.id } } });
+      expect(fresh.status).toBe('PENDING');
+      expect(fresh.attempts).toBe(0);
+      expect(fresh.channel).toBe('EMAIL');
+      expect(fresh.recipient).toBe('cust-r2@example.com'); // the stored value
+      expect(fresh.sentAt).toBeNull();
+      expect(fresh.error).toBeNull();
+
+      // it matches the drainer's candidate query (status PENDING branch)
+      const pickable = await prisma.broadcast.findMany({
+        where: { OR: [{ status: 'PENDING' }, { status: 'FAILED', attempts: { lt: 5 } }] },
+      });
+      expect(pickable.some((b) => b.id === fresh.id)).toBe(true);
+    } finally {
+      await cleanup(m);
+    }
+  });
+
+  it('refused while a PENDING exists for the SAME order (any channel) — 422 RESEND_ALREADY_PENDING, zero writes', async () => {
+    const m = await createScratchMerchant();
+    try {
+      const orderId = await createOrder(m);
+      const billId = await createBill(m, orderId);
+      await addBroadcastRow(orderId, { status: 'FAILED', channel: 'EMAIL', recipient: 'e@example.com' });
+      await addBroadcastRow(orderId, { status: 'PENDING', channel: 'SMS', recipient: '9990001111' }); // different channel
+
+      const countBefore = await prisma.broadcast.count({ where: { orderId } });
+      const err = await service.resend(m.merchantId, billId).catch((e) => e);
+      expect((err as { getResponse: () => unknown }).getResponse()).toMatchObject({ error_code: 'RESEND_ALREADY_PENDING' });
+      expect(await prisma.broadcast.count({ where: { orderId } })).toBe(countBefore);
+    } finally {
+      await cleanup(m);
+    }
+  });
+
+  it('a PENDING on a DIFFERENT order does NOT block the resend', async () => {
+    const m = await createScratchMerchant();
+    try {
+      const orderA = await createOrder(m);
+      const billA = await createBill(m, orderA);
+      await addBroadcastRow(orderA, { status: 'FAILED', recipient: 'a@example.com' });
+
+      const orderB = await createOrder(m);
+      await addBroadcastRow(orderB, { status: 'PENDING', recipient: 'b@example.com' });
+
+      const result = await service.resend(m.merchantId, billA);
+      expect(result.resent).toBe(true);
+    } finally {
+      await cleanup(m);
+    }
+  });
+
+  it('the partial unique index rejects a second PENDING for one order at the DB level', async () => {
+    const m = await createScratchMerchant();
+    try {
+      const orderId = await createOrder(m);
+      await addBroadcastRow(orderId, { status: 'PENDING', recipient: 'one@example.com' });
+      await expect(addBroadcastRow(orderId, { status: 'PENDING', recipient: 'two@example.com' })).rejects.toMatchObject({ code: 'P2002' });
+      // SENT/FAILED are unconstrained
+      await expect(addBroadcastRow(orderId, { status: 'SENT', recipient: 'three@example.com' })).resolves.toBeTruthy();
+      await expect(addBroadcastRow(orderId, { status: 'FAILED', recipient: 'four@example.com' })).resolves.toBeTruthy();
+    } finally {
+      await cleanup(m);
+    }
+  });
+
+  it('422 NO_FAILED_BROADCAST when the bill has only SENT broadcasts — zero writes', async () => {
+    const m = await createScratchMerchant();
+    try {
+      const orderId = await createOrder(m);
+      const billId = await createBill(m, orderId);
+      await addBroadcastRow(orderId, { status: 'SENT', recipient: 's@example.com' });
+
+      const countBefore = await prisma.broadcast.count({ where: { orderId } });
+      const err = await service.resend(m.merchantId, billId).catch((e) => e);
+      expect((err as { getResponse: () => unknown }).getResponse()).toMatchObject({ error_code: 'NO_FAILED_BROADCAST' });
+      expect(await prisma.broadcast.count({ where: { orderId } })).toBe(countBefore);
+    } finally {
+      await cleanup(m);
+    }
+  });
+
+  it('cross-merchant billId → 404 (NotFoundException), zero writes', async () => {
+    const a = await createScratchMerchant();
+    const b = await createScratchMerchant();
+    try {
+      const orderB = await createOrder(b);
+      const billB = await createBill(b, orderB);
+      await addBroadcastRow(orderB, { status: 'FAILED', recipient: 'b-cust@example.com' });
+
+      const countBefore = await prisma.broadcast.count({ where: { orderId: orderB } });
+      await expect(service.resend(a.merchantId, billB)).rejects.toThrow(/Not Found|NotFound/i);
+      expect(await prisma.broadcast.count({ where: { orderId: orderB } })).toBe(countBefore);
+    } finally {
+      await cleanup(a);
+      await cleanup(b);
+    }
+  });
+
+  it('resends regardless of attempts count (D-79 NIT-2) — a FAILED row at attempts 1 still resends', async () => {
+    const m = await createScratchMerchant();
+    try {
+      const orderId = await createOrder(m);
+      const billId = await createBill(m, orderId);
+      await addBroadcastRow(orderId, { status: 'FAILED', attempts: 1, recipient: 'notexhausted@example.com' });
+
+      const result = await service.resend(m.merchantId, billId);
+      expect(result.resent).toBe(true);
+      expect(await prisma.broadcast.count({ where: { orderId, status: 'PENDING' } })).toBe(1);
+    } finally {
+      await cleanup(m);
+    }
+  });
+});

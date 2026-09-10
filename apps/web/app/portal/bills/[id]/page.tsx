@@ -6,6 +6,7 @@ import { cookies } from 'next/headers';
 import { notFound } from 'next/navigation';
 import { formatMoney } from '../../../../src/render/money-format';
 import { formatUtcTimestamp } from '../../../../src/render/date-format';
+import { ResendButton } from './ResendButton';
 
 const API_BASE_URL = process.env.API_BASE_URL ?? 'http://localhost:4000';
 const PUBLIC_BILL_BASE_URL = process.env.PUBLIC_BILL_BASE_URL ?? 'http://localhost:3000';
@@ -136,6 +137,22 @@ export default async function PortalBillDetailPage({ params }: { params: Promise
     return <ErrorState />;
   }
 
+  // R-2 (D-69/D-79): the resend control is server-gated — MERCHANT_ADMIN, and
+  // the bill must have a FAILED delivery with no PENDING one in flight.
+  let role: string | undefined;
+  try {
+    const meRes = await fetch(`${API_BASE_URL}/portal/me`, {
+      cache: 'no-store',
+      headers: sessionCookie ? { cookie: `${SESSION_COOKIE}=${sessionCookie.value}` } : {},
+    });
+    if (meRes.ok) role = ((await meRes.json()) as { role?: string }).role;
+  } catch {
+    role = undefined;
+  }
+  const hasFailed = payload.broadcasts.some((b) => b.status === 'FAILED');
+  const hasPending = payload.broadcasts.some((b) => b.status === 'PENDING');
+  const canResend = role === 'MERCHANT_ADMIN' && hasFailed && !hasPending;
+
   return (
     <section className="portal-bill-detail">
       <a href="/portal/bills" className="portal-bill-detail-back">
@@ -265,6 +282,8 @@ export default async function PortalBillDetailPage({ params }: { params: Promise
           </tbody>
         </table>
       )}
+
+      {canResend && <ResendButton billId={payload.id} />}
 
       {payload.identifier && (
         <a

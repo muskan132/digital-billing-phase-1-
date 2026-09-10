@@ -1,0 +1,33 @@
+-- R-2 (D-69 / D-79): "at most one delivery in flight per order" is D-69's
+-- stated rate limit for resend, and D-69 calls it STRUCTURAL. This partial
+-- unique index is that structure: no order may hold two PENDING broadcasts at
+-- once.
+--
+-- Safe against every existing writer:
+--   * P-1 (callback) and P-2 (direct API) each create exactly ONE Broadcast per
+--     order, inside the order-upsert's `create` branch (`update: {}` on replay),
+--     so neither ever produces a second PENDING for an order.
+--   * the drainer only ever UPDATEs a Broadcast (PENDING -> SENT/FAILED); it
+--     never inserts.
+--   * R-2's resend is therefore the ONLY path that could add a second concurrent
+--     PENDING to an existing order — which is exactly the race this index closes.
+--     R-2 pre-checks with a COUNT for the friendly 422 and catches the P2002
+--     from this index (concurrent double-click) as the SAME
+--     422 RESEND_ALREADY_PENDING (D-79) — indistinguishable to the caller.
+--
+-- WHERE status = 'PENDING': SENT and FAILED rows accumulate freely (D-6's
+-- append-only queue, D-7's per-row retry history, R-2's new-row-not-retry). Only
+-- the in-flight state is constrained.
+--
+-- Hand-written SQL, same precedent as S-10's RENAME COLUMN and S-11's partial
+-- unique index: Prisma (v6) cannot express a partial unique index declaratively,
+-- so schema.prisma is deliberately NOT updated and this index will not
+-- round-trip through a future `prisma migrate dev`. A Phase-6 schema change that
+-- runs `migrate dev` must re-add it (or Prisma drops it as "not in schema").
+--
+-- Precondition (checked 2026-09-10 against the dev DB): zero orders currently
+-- hold more than one PENDING broadcast (in fact zero PENDING rows exist), so
+-- index creation has no conflicts to resolve.
+CREATE UNIQUE INDEX "Broadcast_orderId_pending_key"
+  ON "Broadcast" ("orderId")
+  WHERE "status" = 'PENDING';

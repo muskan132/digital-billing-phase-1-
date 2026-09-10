@@ -21,6 +21,7 @@
     "verify:f7": "ts-node scripts/verify-f7-direct-api-resolution.ts",
     "verify:f8": "ts-node scripts/verify-f8-templates-list-ui.ts",
     "verify:r1": "ts-node scripts/verify-r1-delivery-visibility.ts",
+    "verify:r2": "ts-node scripts/verify-r2-resend.ts",
     "test": "jest"
   },
   "dependencies": {

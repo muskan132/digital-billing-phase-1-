@@ -1240,3 +1240,30 @@ a.portal-templates-row-name:hover {
 .portal-deliveries-exhausted {
   color: var(--semantic-error);
 }
+
+/* ==================== Portal bill detail — resend (R-2) ==================== */
+.portal-bill-detail-resend {
+  margin: 12px 0 24px;
+}
+
+.portal-bill-detail-resend button {
+  padding: 8px 16px;
+  background: var(--primary);
+  color: var(--canvas);
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.portal-bill-detail-resend button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.portal-bill-detail-resend-error {
+  margin: 8px 0 0;
+  color: var(--semantic-error);
+  font-size: 13px;
+}

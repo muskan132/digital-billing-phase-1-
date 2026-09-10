@@ -3,12 +3,13 @@
 // readable by MERCHANT_ADMIN and STORE_STAFF, same as the roadmap states
 // (rbac.md is referenced there but absent from docs/; D-50's own text is
 // the source of truth used here).
-import { BadRequestException, Controller, Get, Param, Query, UseGuards } from '@nestjs/common';
-import { BillType, OrderSource, UserRole } from '@prisma/client';
+import { BadRequestException, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
+import { BillType, Channel, OrderSource, UserRole } from '@prisma/client';
 import { SessionGuard } from '../auth/session.guard';
 import { Roles } from '../auth/roles.decorator';
 import { CurrentMerchantContext, MerchantContext } from '../auth/merchant-context';
 import { PortalBillDetailDto, PortalBillListResult, PortalBillsService } from './portal-bills.service';
+import { PortalDeliveriesService } from './portal-deliveries.service';
 
 interface ListBillsQuery {
   cursor?: string;
@@ -57,7 +58,10 @@ function parseLimit(value: string | undefined): number | undefined {
 @UseGuards(SessionGuard)
 @Roles(UserRole.MERCHANT_ADMIN, UserRole.STORE_STAFF)
 export class PortalBillsController {
-  constructor(private readonly portalBillsService: PortalBillsService) {}
+  constructor(
+    private readonly portalBillsService: PortalBillsService,
+    private readonly portalDeliveriesService: PortalDeliveriesService,
+  ) {}
 
   @Get()
   async list(@Query() query: ListBillsQuery, @CurrentMerchantContext() ctx: MerchantContext): Promise<PortalBillListResult> {
@@ -78,5 +82,18 @@ export class PortalBillsController {
   @Get(':id')
   async detail(@Param('id') id: string, @CurrentMerchantContext() ctx: MerchantContext): Promise<PortalBillDetailDto> {
     return this.portalBillsService.findOne(ctx.merchantId, id);
+  }
+
+  // R-2 / D-69 / D-79: re-queue a FAILED delivery. MERCHANT_ADMIN only
+  // (method-level override of the class read-tier — resend is a write / PII
+  // egress). NO @Body — a `recipient` in the request is structurally unreadable.
+  // 201 (Nest default); another merchant's / a nonexistent billId -> 404.
+  @Post(':id/resend')
+  @Roles(UserRole.MERCHANT_ADMIN)
+  async resend(
+    @Param('id') id: string,
+    @CurrentMerchantContext() ctx: MerchantContext,
+  ): Promise<{ resent: true; channel: Channel }> {
+    return this.portalDeliveriesService.resend(ctx.merchantId, id);
   }
 }
