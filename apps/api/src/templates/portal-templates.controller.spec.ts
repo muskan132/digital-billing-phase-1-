@@ -67,7 +67,8 @@ describe('PortalTemplatesController — builder routes delegate to TemplatesServ
       create: jest.fn().mockResolvedValue({ id: 'tpl-created' }),
       save: jest.fn().mockResolvedValue({ id: 'tpl-1-v2' }),
       saveAs: jest.fn().mockResolvedValue({ id: 'tpl-saved-as' }),
-      setDefault: jest.fn().mockResolvedValue({ id: 'merchant-A' }),
+      setDefault: jest.fn().mockResolvedValue({ defaultReceiptTemplateId: 'tpl-1', defaultTaxInvoiceTemplateId: null }),
+      getDefaults: jest.fn().mockResolvedValue({ receipt: null, taxInvoice: null }),
       archive: jest.fn().mockResolvedValue({ id: 'tpl-1' }),
       restore: jest.fn().mockResolvedValue({ id: 'tpl-1', archivedAt: null }),
       listArchived: jest.fn().mockResolvedValue([]),
@@ -116,6 +117,22 @@ describe('PortalTemplatesController — builder routes delegate to TemplatesServ
     expect(service.archive).toHaveBeenCalledWith('tpl-1', 'merchant-A');
   });
 
+  it('setDefault(id, merchantId) — returns the service DTO verbatim (two pointer ids)', async () => {
+    const { controller, service } = makeController();
+    const result = await controller.setDefault('tpl-1', CTX);
+    expect(service.setDefault).toHaveBeenCalledWith('tpl-1', 'merchant-A');
+    expect(result).toEqual({ defaultReceiptTemplateId: 'tpl-1', defaultTaxInvoiceTemplateId: null });
+  });
+
+  it('defaults(merchantId) — F-6, delegates to getDefaults', async () => {
+    const { controller, service } = makeController({
+      getDefaults: jest.fn().mockResolvedValue({ receipt: { id: 'r', name: 'R' }, taxInvoice: null }),
+    });
+    const result = await controller.defaults(CTX);
+    expect(service.getDefaults).toHaveBeenCalledWith('merchant-A');
+    expect(result).toEqual({ receipt: { id: 'r', name: 'R' }, taxInvoice: null });
+  });
+
   it('restore(id, merchantId) — F-5', async () => {
     const { controller, service } = makeController();
     await controller.restore('tpl-1', CTX);
@@ -162,7 +179,8 @@ const FAKE_TEMPLATES_SERVICE = {
   save: async () => ({ id: 'tpl-1-v2' }),
   saveAs: async () => ({ id: 'tpl-saved-as' }),
   deleteLineage: async () => ({ deletedCount: 1 }),
-  setDefault: async () => ({ id: 'merchant-A' }),
+  setDefault: async () => ({ defaultReceiptTemplateId: 'tpl-1', defaultTaxInvoiceTemplateId: null }),
+  getDefaults: async () => ({ receipt: null, taxInvoice: null }),
   archive: async () => ({ id: 'tpl-1' }),
   restore: async () => ({ id: 'tpl-1', archivedAt: null }),
   listArchived: async () => [],
@@ -199,9 +217,11 @@ describe('PortalTemplatesController (structural — real Nest app, real SessionG
       const list = await fetch(`${baseUrl}/portal/templates`, { headers: { cookie: `session=${role}` } });
       const findOne = await fetch(`${baseUrl}/portal/templates/tpl-1`, { headers: { cookie: `session=${role}` } });
       const archived = await fetch(`${baseUrl}/portal/templates/archived`, { headers: { cookie: `session=${role}` } });
+      const defaults = await fetch(`${baseUrl}/portal/templates/defaults`, { headers: { cookie: `session=${role}` } });
       expect(list.status).toBe(200);
       expect(findOne.status).toBe(200);
       expect(archived.status).toBe(200);
+      expect(defaults.status).toBe(200);
     }
   });
 

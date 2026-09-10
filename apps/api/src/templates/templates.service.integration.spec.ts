@@ -991,3 +991,123 @@ describe('F-5: archive view + restore (real DB)', () => {
     await cleanupMerchant(other);
   });
 });
+
+// F-6 (D-76): default selection, per bill type — pointer writes + the dashboard
+// read surface. Real Postgres: the Prisma `select` that keeps the raw Merchant
+// row (secretKeyEnc) out of the response cannot be proven with a mock.
+describe('F-6: default selection per bill type (real DB)', () => {
+  let merchant: ScratchMerchant;
+
+  async function createTaxInvoiceTemplate(name: string) {
+    return prisma.template.create({
+      data: {
+        id: uniqueId('tpl'),
+        merchantId: merchant.merchantId,
+        name,
+        billType: 'TAX_INVOICE',
+        layoutSchema: { schemaVersion: 2, skeleton: 'RETAIL', blocks: [] },
+        isHead: true,
+      },
+    });
+  }
+
+  beforeAll(async () => {
+    merchant = await createScratchMerchant();
+  });
+
+  afterAll(async () => {
+    await prisma.merchant.update({
+      where: { id: merchant.merchantId },
+      data: { defaultReceiptTemplateId: null, defaultTaxInvoiceTemplateId: null },
+    });
+    await cleanupMerchant(merchant);
+  });
+
+  it('setting a RECEIPT template writes defaultReceiptTemplateId and leaves the tax-invoice pointer untouched — and vice versa', async () => {
+    const receipt = await createOwnTemplateWithName(merchant, 'F-6 receipt', true, uniqueId('tpl'));
+    const taxInvoice = await createTaxInvoiceTemplate('F-6 tax invoice');
+
+    const afterReceipt = await service.setDefault(receipt.id, merchant.merchantId);
+    expect(afterReceipt).toEqual({ defaultReceiptTemplateId: receipt.id, defaultTaxInvoiceTemplateId: null });
+
+    const afterTaxInvoice = await service.setDefault(taxInvoice.id, merchant.merchantId);
+    expect(afterTaxInvoice).toEqual({ defaultReceiptTemplateId: receipt.id, defaultTaxInvoiceTemplateId: taxInvoice.id });
+
+    // Re-pointing receipt again leaves tax-invoice where it is.
+    const receipt2 = await createOwnTemplateWithName(merchant, 'F-6 receipt 2', true, uniqueId('tpl'));
+    const afterReceipt2 = await service.setDefault(receipt2.id, merchant.merchantId);
+    expect(afterReceipt2).toEqual({ defaultReceiptTemplateId: receipt2.id, defaultTaxInvoiceTemplateId: taxInvoice.id });
+  });
+
+  it('BLOCKER-1 lock: setDefault returns ONLY the two pointer ids — no secretKeyEnc / gstin / address / support contacts, ever', async () => {
+    // Give the merchant a full set of sensitive fields so a leak would be visible.
+    await prisma.merchant.update({
+      where: { id: merchant.merchantId },
+      data: {
+        gstin: '27AAAAA0000A1Z5',
+        addressLine1: '1 Main St',
+        addressLine2: 'Unit 2',
+        city: 'Indore',
+        state: 'MP',
+        pincode: '452001',
+        supportEmail: 'ops@example.com',
+        supportPhone: '9999999999',
+      },
+    });
+    const t = await createOwnTemplateWithName(merchant, 'F-6 keyset', true, uniqueId('tpl'));
+
+    const result = await service.setDefault(t.id, merchant.merchantId);
+
+    expect(Object.keys(result).sort()).toEqual(['defaultReceiptTemplateId', 'defaultTaxInvoiceTemplateId']);
+    for (const forbidden of [
+      'secretKeyEnc',
+      'gstin',
+      'gstStateCode',
+      'addressLine1',
+      'addressLine2',
+      'city',
+      'state',
+      'pincode',
+      'supportEmail',
+      'supportPhone',
+      'name',
+      'jiopayMid',
+      'id',
+    ]) {
+      expect(result).not.toHaveProperty(forbidden);
+    }
+    // And the serialized form carries no Buffer (secretKeyEnc) anywhere.
+    expect(JSON.stringify(result)).not.toMatch(/Buffer|secretKeyEnc/i);
+  });
+
+  it('a non-head template is refused with 422 CANNOT_SET_NON_HEAD_AS_DEFAULT; an archived one is a 404 (D-76 MINOR-1)', async () => {
+    const v1 = await createOwnTemplateWithName(merchant, 'F-6 nonhead', true, uniqueId('tpl'));
+    const v2 = await service.save(v1.id, { layoutSchema: { blocks: MINIMAL_VALID_BLOCKS } }, merchant.merchantId);
+
+    const nonHeadErr = await service.setDefault(v1.id, merchant.merchantId).catch((e: unknown) => e);
+    expect(nonHeadErr).toBeInstanceOf(UnprocessableEntityException);
+    expect((nonHeadErr as UnprocessableEntityException).getResponse()).toMatchObject({ error_code: 'CANNOT_SET_NON_HEAD_AS_DEFAULT' });
+
+    await service.archive(v2.id, merchant.merchantId);
+    await expect(service.setDefault(v2.id, merchant.merchantId)).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('a second merchant\'s templateId → 404', async () => {
+    const other = await createScratchMerchant();
+    const theirs = await createOwnTemplateWithName(other, 'F-6 theirs', true, uniqueId('tpl'));
+    await expect(service.setDefault(theirs.id, merchant.merchantId)).rejects.toBeInstanceOf(NotFoundException);
+    await cleanupMerchant(other);
+  });
+
+  it('getDefaults resolves both pointers to { id, name }', async () => {
+    const receipt = await createOwnTemplateWithName(merchant, 'F-6 gd receipt', true, uniqueId('tpl'));
+    const taxInvoice = await createTaxInvoiceTemplate('F-6 gd tax invoice');
+    await service.setDefault(receipt.id, merchant.merchantId);
+    await service.setDefault(taxInvoice.id, merchant.merchantId);
+
+    expect(await service.getDefaults(merchant.merchantId)).toEqual({
+      receipt: { id: receipt.id, name: 'F-6 gd receipt' },
+      taxInvoice: { id: taxInvoice.id, name: 'F-6 gd tax invoice' },
+    });
+  });
+});

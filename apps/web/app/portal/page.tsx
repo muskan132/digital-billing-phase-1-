@@ -8,6 +8,7 @@
 import { cookies } from 'next/headers';
 import { formatMoney } from '../../src/render/money-format';
 import { formatUtcTimestamp } from '../../src/render/date-format';
+import { DefaultTemplatesModule } from './DefaultTemplatesModule';
 
 const API_BASE_URL = process.env.API_BASE_URL ?? 'http://localhost:4000';
 const SESSION_COOKIE = 'session';
@@ -25,6 +26,18 @@ interface PortalTemplateListItem {
 interface PortalTemplateListResponse {
   templates: PortalTemplateListItem[];
   defaultTemplateId: string | null;
+}
+
+// F-6 (D-76): GET /portal/templates/defaults — the two default pointers
+// resolved to { id, name } for the "Default templates" module.
+interface PortalTemplateDefaultsResponse {
+  receipt: { id: string; name: string } | null;
+  taxInvoice: { id: string; name: string } | null;
+}
+
+interface PortalMe {
+  merchantName: string;
+  role: string;
 }
 
 interface PortalBillListItem {
@@ -72,6 +85,24 @@ function isPortalBillListResponse(value: unknown): value is PortalBillListRespon
   return Array.isArray(v.items);
 }
 
+function isDefaultRef(value: unknown): value is { id: string; name: string } {
+  if (typeof value !== 'object' || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return typeof v.id === 'string' && typeof v.name === 'string';
+}
+
+function isPortalTemplateDefaultsResponse(value: unknown): value is PortalTemplateDefaultsResponse {
+  if (typeof value !== 'object' || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return (v.receipt === null || isDefaultRef(v.receipt)) && (v.taxInvoice === null || isDefaultRef(v.taxInvoice));
+}
+
+function isPortalMe(value: unknown): value is PortalMe {
+  if (typeof value !== 'object' || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return typeof v.merchantName === 'string' && typeof v.role === 'string';
+}
+
 const BILL_TYPE_LABELS: Record<string, string> = {
   RECEIPT: 'Receipt',
   TAX_INVOICE: 'Tax invoice',
@@ -94,13 +125,18 @@ export default async function PortalDashboard() {
   const cookieStore = await cookies();
   const sessionCookie = cookieStore.get(SESSION_COOKIE)?.value;
 
-  const [templatesRaw, billsRaw] = await Promise.all([
+  const [templatesRaw, billsRaw, defaultsRaw, meRaw] = await Promise.all([
     fetchJson<unknown>('/portal/templates', sessionCookie),
     fetchJson<unknown>(`/portal/bills?limit=${RECENT_BILLS_LIMIT}`, sessionCookie),
+    fetchJson<unknown>('/portal/templates/defaults', sessionCookie),
+    fetchJson<unknown>('/portal/me', sessionCookie),
   ]);
 
   const templates = isPortalTemplateListResponse(templatesRaw) ? templatesRaw : null;
   const bills = isPortalBillListResponse(billsRaw) ? billsRaw : null;
+  const defaults = isPortalTemplateDefaultsResponse(defaultsRaw) ? defaultsRaw : null;
+  const me = isPortalMe(meRaw) ? meRaw : null;
+  const canEditDefaults = me?.role === 'MERCHANT_ADMIN';
 
   const createInvoiceHref = templates?.defaultTemplateId
     ? `/portal/templates/${templates.defaultTemplateId}`
@@ -137,6 +173,19 @@ export default async function PortalDashboard() {
           </ul>
         )}
       </section>
+
+      {defaults === null ? (
+        <section className="portal-dashboard-panel">
+          <h2 className="portal-dashboard-panel-title">Default templates</h2>
+          <p className="portal-dashboard-error">Something went wrong loading your default templates.</p>
+        </section>
+      ) : (
+        <DefaultTemplatesModule
+          defaults={defaults}
+          candidates={(templates?.templates ?? []).map((t) => ({ id: t.id, name: t.name, billType: t.billType }))}
+          canEdit={canEditDefaults}
+        />
+      )}
 
       <section className="portal-dashboard-panel">
         <div className="portal-dashboard-panel-header">

@@ -159,12 +159,34 @@ export class TemplatesService {
   // W-2: read-only lookup of the merchant's own stored default — no decision
   // logic here, just the same field setDefault()/archive() already write/read
   // elsewhere, exposed for the dashboard's "Create invoice" entry point.
-  // S-10/D-60: deliberately still the RECEIPT pointer only — the dashboard's
-  // single "Create invoice" shortcut and its DTO shape are unchanged until
-  // F-6 builds the real two-pointer UI.
+  // S-10/D-60: deliberately still the RECEIPT pointer only — the "Create
+  // invoice" shortcut and list()'s single-default DTO are left as-is here; F-8
+  // reshapes list()'s response to carry both pointers. F-6 adds getDefaults()
+  // alongside rather than widening this one (D-76).
   async getDefaultTemplateId(merchantId: string): Promise<string | null> {
     const merchant = await this.prisma.merchant.findUnique({ where: { id: merchantId }, select: { defaultReceiptTemplateId: true } });
     return merchant?.defaultReceiptTemplateId ?? null;
+  }
+
+  // F-6 (D-76): both default pointers, resolved to { id, name } for the
+  // dashboard "Default templates" module. A DERIVED projection — nothing here
+  // is a stored `isDefault` flag (D-39); the single source of truth stays the
+  // two Merchant FK columns (D-60). Read-tier: no write, no decision logic.
+  async getDefaults(merchantId: string): Promise<{
+    receipt: { id: string; name: string } | null;
+    taxInvoice: { id: string; name: string } | null;
+  }> {
+    const merchant = await this.prisma.merchant.findUnique({
+      where: { id: merchantId },
+      select: {
+        defaultReceiptTemplate: { select: { id: true, name: true } },
+        defaultTaxInvoiceTemplate: { select: { id: true, name: true } },
+      },
+    });
+    return {
+      receipt: merchant?.defaultReceiptTemplate ?? null,
+      taxInvoice: merchant?.defaultTaxInvoiceTemplate ?? null,
+    };
   }
 
   // Same merchant/library scope as list(), but not restricted to isHead — a
@@ -522,8 +544,13 @@ export class TemplatesService {
   // C-3: set-default. Target must be within read-scope (C-1) and a live,
   // current head — pointing the default at an archived or superseded row
   // would make every subsequent bill resolve a template no longer shown
-  // anywhere in the builder.
-  async setDefault(id: string, merchantId: string) {
+  // anywhere in the builder. An archived template falls out of the scope
+  // query (`archivedAt: null`) and is therefore a 404, not a named 422 —
+  // the F-6/F-8 pickers never offer one as a candidate (D-76, MINOR-1).
+  async setDefault(id: string, merchantId: string): Promise<{
+    defaultReceiptTemplateId: string | null;
+    defaultTaxInvoiceTemplateId: string | null;
+  }> {
     const template = await this.prisma.template.findFirst({
       where: {
         id,
@@ -539,12 +566,21 @@ export class TemplatesService {
     }
 
     // S-10/D-60: dispatched to the pointer matching this template's own
-    // billType — mechanical dispatch only, not F-6's per-billType product
-    // surface (no new error codes, no response shape change here).
-    return this.prisma.merchant.update({
+    // billType — mechanical dispatch only.
+    const updated = await this.prisma.merchant.update({
       where: { id: merchantId },
       data: { [defaultColumnFor(template.billType)]: template.id },
+      // F-6 (D-76): NEVER return the raw Merchant row — it carries secretKeyEnc
+      // (the JioPay HMAC secret) plus gstin/address/support contacts. The write
+      // boundary is enforced here at the writer, same discipline as D-48/L-2;
+      // the explicit object below is the contract, the `select` is defence in
+      // depth. A key-set test locks this.
+      select: { defaultReceiptTemplateId: true, defaultTaxInvoiceTemplateId: true },
     });
+    return {
+      defaultReceiptTemplateId: updated.defaultReceiptTemplateId,
+      defaultTaxInvoiceTemplateId: updated.defaultTaxInvoiceTemplateId,
+    };
   }
 
   // C-3: archive (D-33 — soft-archive only, no hard delete anywhere). Refused

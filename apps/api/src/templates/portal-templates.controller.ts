@@ -32,6 +32,20 @@ export interface PortalTemplateListResult {
   defaultTemplateId: string | null;
 }
 
+// F-6 (D-76): the dashboard "Default templates" module reads this.
+export interface PortalTemplateDefaultRef {
+  id: string;
+  name: string;
+}
+export interface PortalTemplateDefaultsResult {
+  receipt: PortalTemplateDefaultRef | null;
+  taxInvoice: PortalTemplateDefaultRef | null;
+}
+export interface PortalSetDefaultResult {
+  defaultReceiptTemplateId: string | null;
+  defaultTaxInvoiceTemplateId: string | null;
+}
+
 // D-50: same read access as history (MERCHANT_ADMIN + STORE_STAFF) — a
 // dashboard list is a read, not a builder write.
 @Controller('portal/templates')
@@ -79,6 +93,16 @@ export class PortalTemplatesController {
     }));
   }
 
+  // F-6 (D-76): the two default pointers resolved to { id, name }, for the
+  // dashboard "Default templates" module. Read-tier (MERCHANT_ADMIN +
+  // STORE_STAFF, class-level default) — the change action is the MERCHANT_ADMIN
+  // set-default route below. Declared BEFORE @Get(':id') so "defaults" is not
+  // captured as a template id.
+  @Get('defaults')
+  async defaults(@CurrentMerchantContext() ctx: MerchantContext): Promise<PortalTemplateDefaultsResult> {
+    return this.templatesService.getDefaults(ctx.merchantId);
+  }
+
   // Read — same MERCHANT_ADMIN+STORE_STAFF as list() (class-level default,
   // no method-level override needed). D-47: another merchant's/nonexistent
   // id both 404 via the exact same findFirst TemplatesService already uses.
@@ -115,9 +139,14 @@ export class PortalTemplatesController {
     return this.templatesService.saveAs(id, body, ctx.merchantId);
   }
 
+  // F-6 (D-76): returns only the two pointer ids — TemplatesService.setDefault
+  // never hands back the raw Merchant row (secretKeyEnc / gstin / address).
   @Post(':id/set-default')
   @Roles(UserRole.MERCHANT_ADMIN)
-  async setDefault(@Param('id') id: string, @CurrentMerchantContext() ctx: MerchantContext) {
+  async setDefault(
+    @Param('id') id: string,
+    @CurrentMerchantContext() ctx: MerchantContext,
+  ): Promise<PortalSetDefaultResult> {
     return this.templatesService.setDefault(id, ctx.merchantId);
   }
 

@@ -17,6 +17,7 @@
     "verify:a2": "ts-node scripts/verify-a2-login-session.ts",
     "verify:w1": "ts-node scripts/verify-w1-portal-shell.ts",
     "verify:x3": "ts-node scripts/verify-x3-final-regression.ts",
+    "verify:f6": "ts-node scripts/verify-f6-default-selection.ts",
     "test": "jest"
   },
   "dependencies": {
