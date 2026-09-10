@@ -28,10 +28,13 @@ const PORT = Number(process.env.DEV_IDP_PORT ?? 9000);
 const ISSUER = process.env.DEV_IDP_ISSUER ?? `http://localhost:${PORT}`;
 const REDIRECT_URI = process.env.DEV_IDP_REDIRECT_URI ?? 'http://localhost:4000/auth/callback';
 
-// Matches apps/api/prisma/seed.ts's seeded MERCHANT_ADMIN User id — A-2 is
-// what actually resolves this subject to a real User row. This file has no
-// import of, or awareness of, the User table itself.
-const SEEDED_SUBJECT = 'seed-user-merchant-admin';
+// Match apps/api/prisma/seed.ts's seeded User ids — A-2/A-6 are what actually
+// resolve these subjects to real User rows. This file has no import of, or
+// awareness of, the User table itself: `findAccount` below accepts ANY subject
+// (D-54), these are just the two the tester is expected to type at the login
+// screen. `seed-user-merchant-admin` -> MERCHANT_ADMIN, `seed-user-store-staff`
+// -> STORE_STAFF (A-6 / D-50).
+const SEEDED_SUBJECTS = ['seed-user-merchant-admin', 'seed-user-store-staff'];
 
 const oidc = new Provider(ISSUER, {
   clients: [
@@ -76,5 +79,5 @@ oidc.on('server_error', (_ctx, err) => {
 
 const server = createServer(oidc.callback());
 server.listen(PORT, () => {
-  console.log(`[dev-idp] listening at ${ISSUER} (seeded subject: ${SEEDED_SUBJECT})`);
+  console.log(`[dev-idp] listening at ${ISSUER} (seeded subjects: ${SEEDED_SUBJECTS.join(', ')})`);
 });

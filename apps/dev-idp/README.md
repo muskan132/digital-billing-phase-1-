@@ -27,6 +27,22 @@ whichever real IdP D-42's open sign-off eventually names — this process is
 a stand-in for that IdP's *protocol shape*, never for its credential
 verification.
 
+## Seeded subjects (what to type at the login screen)
+
+`findAccount` accepts **any** subject value the login form submits (see the
+scope boundary above) — restricting it would make it impossible to test
+`apps/api`'s own rejection paths (unknown subject, ineligible type, disabled
+user). These are just the two values `apps/api/prisma/seed.ts` provisions a
+real `User` row for:
+
+| Type this as the username | Resolves to | Role |
+|---|---|---|
+| `seed-user-merchant-admin` | the seeded `MERCHANT_ADMIN` (A-2) | `MERCHANT_ADMIN` |
+| `seed-user-store-staff` | the seeded `STORE_STAFF` (A-6 / D-50) | `STORE_STAFF` |
+
+The password field is ignored (D-54). Any other value logs in at the IdP but
+`apps/api` rejects the callback with `403` (no matching `User`).
+
 ## Never runs in production
 
 `src/main.ts` refuses to start if `NODE_ENV=production` (D-53). This package

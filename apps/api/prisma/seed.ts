@@ -7,6 +7,7 @@ const prisma = new PrismaClient();
 
 const MERCHANT_ID = 'seed-merchant-demo';
 const USER_MERCHANT_ADMIN_ID = 'seed-user-merchant-admin';
+const USER_STORE_STAFF_ID = 'seed-user-store-staff';
 const USER_PLATFORM_ADMIN_ID = 'seed-user-platform-admin';
 const TEMPLATE_RECEIPT_MINIMALIST_ID = 'seed-template-receipt';
 const TEMPLATE_RECEIPT_THERMAL_ID = 'seed-template-receipt-thermal';
@@ -85,6 +86,31 @@ async function main() {
       role: 'MERCHANT_ADMIN',
       email: 'merchant-admin@demo-merchant.test',
       subject: USER_MERCHANT_ADMIN_ID,
+    },
+  });
+
+  // A-6 (D-50): the second EXTERNAL principal on the same merchant, so the
+  // STORE_STAFF role gate — written since A-3, exercised only by synthetic
+  // cookies in controller specs — is finally hit by a real OIDC principal.
+  // D-50's named gap: "a role gate nobody has ever hit is a claim, not a
+  // control." Type `seed-user-store-staff` at the dev-idp login screen.
+  await prisma.user.upsert({
+    where: { id: USER_STORE_STAFF_ID },
+    create: {
+      id: USER_STORE_STAFF_ID,
+      merchantId: MERCHANT_ID,
+      type: 'EXTERNAL',
+      role: 'STORE_STAFF',
+      email: 'store-staff@demo-merchant.test',
+      // D-42: the only join from an id_token's `sub` claim to this row.
+      subject: USER_STORE_STAFF_ID,
+    },
+    update: {
+      merchantId: MERCHANT_ID,
+      type: 'EXTERNAL',
+      role: 'STORE_STAFF',
+      email: 'store-staff@demo-merchant.test',
+      subject: USER_STORE_STAFF_ID,
     },
   });
 
