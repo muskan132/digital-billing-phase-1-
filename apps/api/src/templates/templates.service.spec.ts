@@ -389,6 +389,90 @@ describe('TemplatesService', () => {
     });
   });
 
+  describe('create (F-3 / D-66 / D-73)', () => {
+    const OK = { name: 'From Scratch', billType: 'RECEIPT', skeleton: 'MINIMALIST' };
+
+    it('writes one new row: version 1, parentTemplateId null, isHead true, merchantId = session, billType/skeleton from the body', async () => {
+      const result = await service.create(OK, MERCHANT_ID);
+      expect(templateCreate).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          merchantId: 'seed-merchant-demo',
+          name: 'From Scratch',
+          billType: 'RECEIPT',
+          skeleton: 'MINIMALIST',
+          version: 1,
+          parentTemplateId: null,
+          isHead: true,
+        }),
+      });
+      // Never a transaction, never the allocator (D-73 — no auto-suffix on create).
+      expect(transactionFn).not.toHaveBeenCalled();
+      expect(result.id).toBe('tpl-cloned');
+    });
+
+    it('the built document is a visible HEADER + a visible ITEMS and nothing else (D-66)', async () => {
+      await service.create(OK, MERCHANT_ID);
+      const doc = templateCreate.mock.calls[0][0].data.layoutSchema as {
+        schemaVersion: number;
+        skeleton: string;
+        blocks: { type: string; visible: boolean; order: number }[];
+      };
+      expect(doc.schemaVersion).toBe(2);
+      expect(doc.skeleton).toBe('MINIMALIST');
+      expect(doc.blocks.map((b) => b.type)).toEqual(['HEADER', 'ITEMS']);
+      expect(doc.blocks.every((b) => b.visible === true)).toBe(true);
+    });
+
+    it.each(['MINIMALIST', 'COMPACT_THERMAL', 'TAX_COMPLIANT', 'RETAIL', 'RESTAURANT'])(
+      'accepts the %s skeleton',
+      async (skeleton) => {
+        await expect(service.create({ ...OK, skeleton }, MERCHANT_ID)).resolves.toBeDefined();
+      },
+    );
+
+    it('rejects skeleton UTILITY with SKELETON_NOT_AVAILABLE_FOR_CREATE (D-73), before any write', async () => {
+      const err = await service.create({ ...OK, skeleton: 'UTILITY' }, MERCHANT_ID).catch((e) => e);
+      expect(err).toBeInstanceOf(UnprocessableEntityException);
+      expect((err as UnprocessableEntityException).getResponse()).toMatchObject({ error_code: 'SKELETON_NOT_AVAILABLE_FOR_CREATE' });
+      expect(templateCreate).not.toHaveBeenCalled();
+    });
+
+    it('rejects an unrecognised skeleton with INVALID_SKELETON (D-40), before any write', async () => {
+      const err = await service.create({ ...OK, skeleton: 'FOOBAR' }, MERCHANT_ID).catch((e) => e);
+      expect(err).toBeInstanceOf(UnprocessableEntityException);
+      expect((err as UnprocessableEntityException).getResponse()).toMatchObject({ error_code: 'INVALID_SKELETON' });
+      expect(templateCreate).not.toHaveBeenCalled();
+    });
+
+    it('rejects an unrecognised billType with INVALID_BILL_TYPE, before any write', async () => {
+      const err = await service.create({ ...OK, billType: 'INVOICE' }, MERCHANT_ID).catch((e) => e);
+      expect(err).toBeInstanceOf(UnprocessableEntityException);
+      expect((err as UnprocessableEntityException).getResponse()).toMatchObject({ error_code: 'INVALID_BILL_TYPE' });
+      expect(templateCreate).not.toHaveBeenCalled();
+    });
+
+    it.each([{ name: undefined }, { name: '   ' }, { billType: undefined }, { skeleton: undefined }])(
+      'rejects a missing/blank required field (%p) with 422, before any write',
+      async (override) => {
+        await expect(service.create({ ...OK, ...override } as never, MERCHANT_ID)).rejects.toBeInstanceOf(UnprocessableEntityException);
+        expect(templateCreate).not.toHaveBeenCalled();
+      },
+    );
+
+    it('a name the merchant already holds → 409 TEMPLATE_NAME_TAKEN, no retry, no suffix (D-73)', async () => {
+      templateCreate.mockRejectedValue(fakeNameP2002());
+      const err = await service.create(OK, MERCHANT_ID).catch((e) => e);
+      expect(err).toBeInstanceOf(ConflictException);
+      expect((err as ConflictException).getResponse()).toMatchObject({ error_code: 'TEMPLATE_NAME_TAKEN' });
+      expect(templateCreate).toHaveBeenCalledTimes(1);
+    });
+
+    it('trims the name', async () => {
+      await service.create({ ...OK, name: '  Padded  ' }, MERCHANT_ID);
+      expect(templateCreate).toHaveBeenCalledWith({ data: expect.objectContaining({ name: 'Padded' }) });
+    });
+  });
+
   describe('setDefault (C-3)', () => {
     it('repoints Merchant.defaultReceiptTemplateId at the given head template, dispatched from its billType (S-10/D-60)', async () => {
       templateFindFirst.mockResolvedValue(MERCHANT_OWNED_TEMPLATE);

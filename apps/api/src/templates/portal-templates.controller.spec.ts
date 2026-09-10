@@ -64,6 +64,7 @@ describe('PortalTemplatesController — builder routes delegate to TemplatesServ
   function makeController(overrides: Partial<Record<string, jest.Mock>> = {}) {
     const service = {
       findOne: jest.fn().mockResolvedValue({ id: 'tpl-1' }),
+      create: jest.fn().mockResolvedValue({ id: 'tpl-created' }),
       save: jest.fn().mockResolvedValue({ id: 'tpl-1-v2' }),
       saveAs: jest.fn().mockResolvedValue({ id: 'tpl-saved-as' }),
       setDefault: jest.fn().mockResolvedValue({ id: 'merchant-A' }),
@@ -91,6 +92,13 @@ describe('PortalTemplatesController — builder routes delegate to TemplatesServ
     const body = { name: 'Copy', layoutSchema: { blocks: [] } };
     await controller.saveAs('tpl-preset', body, CTX);
     expect(service.saveAs).toHaveBeenCalledWith('tpl-preset', body, 'merchant-A');
+  });
+
+  it('create(body, merchantId) — no template id', async () => {
+    const { controller, service } = makeController();
+    const body = { name: 'New', billType: 'RECEIPT', skeleton: 'MINIMALIST' };
+    await controller.create(body, CTX);
+    expect(service.create).toHaveBeenCalledWith(body, 'merchant-A');
   });
 
   it('setDefault(id, merchantId)', async () => {
@@ -121,6 +129,7 @@ const FAKE_TEMPLATES_SERVICE = {
   list: async () => [],
   getDefaultTemplateId: async () => null,
   findOne: async () => ({ id: 'tpl-1' }),
+  create: async () => ({ id: 'tpl-created' }),
   save: async () => ({ id: 'tpl-1-v2' }),
   saveAs: async () => ({ id: 'tpl-saved-as' }),
   setDefault: async () => ({ id: 'merchant-A' }),
@@ -162,8 +171,13 @@ describe('PortalTemplatesController (structural — real Nest app, real SessionG
     }
   });
 
-  it('writes (save/save-as/set-default/archive) accept MERCHANT_ADMIN...', async () => {
+  it('writes (create/save/save-as/set-default/archive) accept MERCHANT_ADMIN...', async () => {
     const cookie = 'session=MERCHANT_ADMIN';
+    const create = await fetch(`${baseUrl}/portal/templates`, {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'New', billType: 'RECEIPT', skeleton: 'MINIMALIST' }),
+    });
     const save = await fetch(`${baseUrl}/portal/templates/tpl-1/save`, {
       method: 'POST',
       headers: { cookie, 'content-type': 'application/json' },
@@ -177,6 +191,7 @@ describe('PortalTemplatesController (structural — real Nest app, real SessionG
     const setDefault = await fetch(`${baseUrl}/portal/templates/tpl-1/set-default`, { method: 'POST', headers: { cookie } });
     const archive = await fetch(`${baseUrl}/portal/templates/tpl-1/archive`, { method: 'POST', headers: { cookie } });
 
+    expect(create.status).toBe(201);
     expect(save.status).toBe(201);
     expect(saveAs.status).toBe(201);
     expect(setDefault.status).toBe(201);
@@ -185,6 +200,11 @@ describe('PortalTemplatesController (structural — real Nest app, real SessionG
 
   it('...and REJECT STORE_STAFF with 403 on every one of them — the A-3 verify line, now actually true', async () => {
     const cookie = 'session=STORE_STAFF';
+    const create = await fetch(`${baseUrl}/portal/templates`, {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'New', billType: 'RECEIPT', skeleton: 'MINIMALIST' }),
+    });
     const save = await fetch(`${baseUrl}/portal/templates/tpl-1/save`, {
       method: 'POST',
       headers: { cookie, 'content-type': 'application/json' },
@@ -198,6 +218,7 @@ describe('PortalTemplatesController (structural — real Nest app, real SessionG
     const setDefault = await fetch(`${baseUrl}/portal/templates/tpl-1/set-default`, { method: 'POST', headers: { cookie } });
     const archive = await fetch(`${baseUrl}/portal/templates/tpl-1/archive`, { method: 'POST', headers: { cookie } });
 
+    expect(create.status).toBe(403);
     expect(save.status).toBe(403);
     expect(saveAs.status).toBe(403);
     expect(setDefault.status).toBe(403);

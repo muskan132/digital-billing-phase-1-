@@ -16,7 +16,7 @@ import { UserRole } from '@prisma/client';
 import { SessionGuard } from '../auth/session.guard';
 import { Roles } from '../auth/roles.decorator';
 import { CurrentMerchantContext, MerchantContext } from '../auth/merchant-context';
-import { SaveAsBody, SaveTemplateBody, TemplatesService } from './templates.service';
+import { CreateTemplateBody, SaveAsBody, SaveTemplateBody, TemplatesService } from './templates.service';
 
 export interface PortalTemplateListItemDto {
   id: string;
@@ -66,6 +66,16 @@ export class PortalTemplatesController {
   @Get(':id')
   async findOne(@Param('id') id: string, @CurrentMerchantContext() ctx: MerchantContext) {
     return this.templatesService.findOne(id, ctx.merchantId);
+  }
+
+  // F-3 (D-66): create-from-scratch. { name, billType, skeleton } — the starting
+  // document is server-built (visible HEADER + visible ITEMS), so no layoutSchema
+  // is accepted. MERCHANT_ADMIN only (D-50/D-59), like every other builder write.
+  @Post()
+  @HttpCode(201)
+  @Roles(UserRole.MERCHANT_ADMIN)
+  async create(@Body() body: CreateTemplateBody, @CurrentMerchantContext() ctx: MerchantContext) {
+    return this.templatesService.create(body, ctx.merchantId);
   }
 
   // D-50/D-59: builder writes are MERCHANT_ADMIN only.

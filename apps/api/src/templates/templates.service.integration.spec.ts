@@ -597,3 +597,84 @@ describe('F-2: Save As (real DB)', () => {
     }
   });
 });
+
+// F-3 (D-66 / D-73): create-from-scratch. Real Postgres only.
+describe('F-3: create-from-scratch (real DB)', () => {
+  let merchant: ScratchMerchant;
+  const CREATABLE = ['MINIMALIST', 'COMPACT_THERMAL', 'TAX_COMPLIANT', 'RETAIL', 'RESTAURANT'];
+
+  beforeAll(async () => {
+    merchant = await createScratchMerchant();
+  });
+
+  afterAll(async () => {
+    await cleanupMerchant(merchant);
+  });
+
+  it.each(CREATABLE)('creates a %s template: version 1, parentTemplateId null, isHead true, session merchant; and it saves with ZERO edits', async (skeleton) => {
+    const created = await service.create(
+      { name: `F-3 ${skeleton} ${Date.now()}`, billType: skeleton === 'MINIMALIST' || skeleton === 'COMPACT_THERMAL' ? 'RECEIPT' : 'TAX_INVOICE', skeleton },
+      merchant.merchantId,
+    );
+    expect(created.version).toBe(1);
+    expect(created.parentTemplateId).toBeNull();
+    expect(created.isHead).toBe(true);
+    expect(created.merchantId).toBe(merchant.merchantId);
+    expect(created.skeleton).toBe(skeleton);
+
+    const doc = created.layoutSchema as { blocks: { type: string; visible: boolean }[] };
+    expect(doc.blocks.map((b) => b.type)).toEqual(['HEADER', 'ITEMS']);
+
+    // Verify criterion: a freshly created template saves with zero edits.
+    const forked = await service.save(created.id, { layoutSchema: { blocks: doc.blocks } }, merchant.merchantId);
+    expect(forked.version).toBe(2);
+  });
+
+  it('rejects skeleton UTILITY with SKELETON_NOT_AVAILABLE_FOR_CREATE (D-73) — zero rows written', async () => {
+    const countBefore = await prisma.template.count({ where: { merchantId: merchant.merchantId } });
+    const err = await service.create({ name: 'F-3 utility', billType: 'TAX_INVOICE', skeleton: 'UTILITY' }, merchant.merchantId).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(UnprocessableEntityException);
+    expect((err as UnprocessableEntityException).getResponse()).toMatchObject({ error_code: 'SKELETON_NOT_AVAILABLE_FOR_CREATE' });
+    expect(await prisma.template.count({ where: { merchantId: merchant.merchantId } })).toBe(countBefore);
+  });
+
+  it('rejects an unrecognised skeleton with INVALID_SKELETON (D-40)', async () => {
+    const err = await service.create({ name: 'F-3 bad skel', billType: 'RECEIPT', skeleton: 'NONSENSE' }, merchant.merchantId).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(UnprocessableEntityException);
+    expect((err as UnprocessableEntityException).getResponse()).toMatchObject({ error_code: 'INVALID_SKELETON' });
+  });
+
+  it('rejects an unrecognised billType with INVALID_BILL_TYPE', async () => {
+    const err = await service.create({ name: 'F-3 bad bt', billType: 'INVOICE', skeleton: 'MINIMALIST' }, merchant.merchantId).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(UnprocessableEntityException);
+    expect((err as UnprocessableEntityException).getResponse()).toMatchObject({ error_code: 'INVALID_BILL_TYPE' });
+  });
+
+  it('a name the merchant already holds → 409 TEMPLATE_NAME_TAKEN, NOT auto-suffixed (D-73)', async () => {
+    await service.create({ name: 'F-3 dupe', billType: 'RECEIPT', skeleton: 'MINIMALIST' }, merchant.merchantId);
+    const err = await service.create({ name: 'F-3 dupe', billType: 'RECEIPT', skeleton: 'RETAIL' }, merchant.merchantId).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ConflictException);
+    expect((err as ConflictException).getResponse()).toMatchObject({ error_code: 'TEMPLATE_NAME_TAKEN' });
+    // Exactly one live head by that name — no "F-3 dupe (1)".
+    const names = (await prisma.template.findMany({ where: { merchantId: merchant.merchantId, isHead: true }, select: { name: true } })).map((t) => t.name);
+    expect(names.filter((n) => n.startsWith('F-3 dupe'))).toEqual(['F-3 dupe']);
+  });
+
+  it('the created row flows through save / saveAs / setDefault / archive with no special-casing', async () => {
+    const created = await service.create({ name: `F-3 flow ${Date.now()}`, billType: 'RECEIPT', skeleton: 'MINIMALIST' }, merchant.merchantId);
+    const blocks = (created.layoutSchema as { blocks: unknown[] }).blocks;
+
+    const forked = await service.save(created.id, { layoutSchema: { blocks } }, merchant.merchantId);
+    expect(forked.parentTemplateId).toBe(created.id);
+
+    const copy = await service.saveAs(forked.id, { name: `F-3 flow copy ${Date.now()}`, layoutSchema: { blocks } }, merchant.merchantId);
+    expect(copy.parentTemplateId).toBeNull();
+
+    const asDefault = await service.setDefault(forked.id, merchant.merchantId);
+    expect(asDefault.defaultReceiptTemplateId).toBe(forked.id);
+
+    // archive: needs a non-default head — archive the saveAs copy.
+    const archived = await service.archive(copy.id, merchant.merchantId);
+    expect(archived.archivedAt).toBeInstanceOf(Date);
+  });
+});

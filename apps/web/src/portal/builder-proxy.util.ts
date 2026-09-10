@@ -12,11 +12,9 @@ import { cookies } from 'next/headers';
 const API_BASE_URL = process.env.API_BASE_URL ?? 'http://localhost:4000';
 const SESSION_COOKIE = 'session';
 
-export async function proxyPortalTemplateWrite(
-  templateId: string,
-  action: 'save' | 'save-as' | 'set-default' | 'archive',
-  body?: unknown,
-): Promise<NextResponse> {
+// The server-to-server POST: forward the session cookie by hand, fetch a CSRF
+// token, call the real API, pass the response straight back.
+async function proxyPortalPost(apiPath: string, body?: unknown): Promise<NextResponse> {
   const cookieStore = await cookies();
   const sessionCookie = cookieStore.get(SESSION_COOKIE);
   if (!sessionCookie) {
@@ -32,7 +30,7 @@ export async function proxyPortalTemplateWrite(
   }
   const { token } = (await csrfResponse.json()) as { token: string };
 
-  const apiResponse = await fetch(`${API_BASE_URL}/portal/templates/${encodeURIComponent(templateId)}/${action}`, {
+  const apiResponse = await fetch(`${API_BASE_URL}${apiPath}`, {
     method: 'POST',
     headers: {
       cookie: `${SESSION_COOKIE}=${sessionCookie.value}`,
@@ -47,4 +45,17 @@ export async function proxyPortalTemplateWrite(
     status: apiResponse.status,
     headers: { 'content-type': apiResponse.headers.get('content-type') ?? 'application/json' },
   });
+}
+
+export async function proxyPortalTemplateWrite(
+  templateId: string,
+  action: 'save' | 'save-as' | 'set-default' | 'archive',
+  body?: unknown,
+): Promise<NextResponse> {
+  return proxyPortalPost(`/portal/templates/${encodeURIComponent(templateId)}/${action}`, body);
+}
+
+// F-3 (D-66): create-from-scratch — `POST /portal/templates`, no template id.
+export async function proxyPortalTemplateCreate(body: unknown): Promise<NextResponse> {
+  return proxyPortalPost('/portal/templates', body);
 }

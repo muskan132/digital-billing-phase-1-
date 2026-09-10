@@ -1,6 +1,6 @@
 import { ConflictException, Injectable, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
-import { BillType, Prisma } from '@prisma/client';
-import { BLOCK_MANIFEST, LayoutSchemaV2, validateLayoutSchema } from '@digital-billing/block-manifest';
+import { BillType, Prisma, TemplateSkeleton } from '@prisma/client';
+import { BLOCK_MANIFEST, generateBlockId, LayoutSchemaV2, validateLayoutSchema } from '@digital-billing/block-manifest';
 import { PrismaService } from '../prisma/prisma.service';
 
 export interface SaveTemplateBody {
@@ -28,6 +28,44 @@ export interface SaveAsBody {
   layoutSchema: {
     blocks: unknown;
     theme?: unknown;
+  };
+}
+
+// F-3 (D-66): create-from-scratch. All three are required; `layoutSchema` is
+// NOT accepted — the starting document is server-built (a visible HEADER + a
+// visible ITEMS), so it always passes validation on the first attempt (D-31).
+export interface CreateTemplateBody {
+  name: string;
+  billType: string;
+  skeleton: string;
+}
+
+// F-3 (D-73): UTILITY is a recognised skeleton (S-10) but has no
+// merchant-buildable form yet — D-66's minimal HEADER+ITEMS document is broken
+// by design on a utility bill (TEMPLATE_SYSTEM_v2 §4.3 has no ITEMS; there is no
+// valid body block to swap in). Same dead end D-72 identified for Save As. So
+// create-from-scratch accepts every skeleton EXCEPT UTILITY, which is rejected
+// distinctly from D-40's unrecognised-value rejection.
+const CREATABLE_SKELETONS: ReadonlySet<TemplateSkeleton> = new Set([
+  TemplateSkeleton.MINIMALIST,
+  TemplateSkeleton.COMPACT_THERMAL,
+  TemplateSkeleton.TAX_COMPLIANT,
+  TemplateSkeleton.RETAIL,
+  TemplateSkeleton.RESTAURANT,
+]);
+
+// F-3 (D-66): the from-scratch starting document — a visible HEADER and a
+// visible ITEMS, nothing else. Skeleton-independent (each skin renders it its
+// own way; the merchant builds it out in the builder). Ids via the U-3 palette
+// scheme. Passes validateLayoutSchema on the first attempt by construction.
+function minimalLayoutSchema(skeleton: TemplateSkeleton): LayoutSchemaV2 {
+  return {
+    schemaVersion: 2,
+    skeleton,
+    blocks: [
+      { id: generateBlockId('HEADER', 1), type: 'HEADER', order: 1, props: {}, visible: true, width: 'full' },
+      { id: generateBlockId('ITEMS', 2), type: 'ITEMS', order: 2, props: {}, visible: true, width: 'full' },
+    ],
   };
 }
 
@@ -377,6 +415,77 @@ export class TemplatesService {
     // The loop returns on success and throws on its final attempt; this is only
     // here to satisfy the type checker.
     throw new ConflictException(TEMPLATE_NAME_TAKEN);
+  }
+
+  // F-3 (D-66): create-from-scratch. Validates name/billType/skeleton at the
+  // boundary (D-40 for an unrecognised skeleton, D-73 for UTILITY), builds the
+  // minimal document server-side, and writes one new row (version 1,
+  // parentTemplateId null, isHead true, owned by the session merchant).
+  // `skeleton` is read exactly once here and no other write path sets it on an
+  // existing row (D-66 immutability). A name the merchant already holds is a
+  // 409 — the F-1 allocator is NOT applied here (D-63/D-73).
+  async create(body: CreateTemplateBody, merchantId: string) {
+    if (typeof body?.name !== 'string' || body.name.trim().length === 0) {
+      throw new UnprocessableEntityException({ error_code: 'MALFORMED_REQUEST', message: 'name is required and must be a non-empty string' });
+    }
+    const name = body.name.trim();
+
+    if (typeof body?.billType !== 'string' || !Object.values(BillType).includes(body.billType as BillType)) {
+      throw new UnprocessableEntityException({
+        error_code: 'INVALID_BILL_TYPE',
+        message: `billType must be one of: ${Object.values(BillType).join(', ')}`,
+      });
+    }
+    const billType = body.billType as BillType;
+
+    // D-40: an unrecognised skeleton is rejected at the boundary, never
+    // defaulted. The message lists the creatable set (D-73) — the values a
+    // merchant can actually pick — not every enum value.
+    if (typeof body?.skeleton !== 'string' || !Object.values(TemplateSkeleton).includes(body.skeleton as TemplateSkeleton)) {
+      throw new UnprocessableEntityException({
+        error_code: 'INVALID_SKELETON',
+        message: `skeleton must be one of: ${[...CREATABLE_SKELETONS].join(', ')}`,
+      });
+    }
+    const skeleton = body.skeleton as TemplateSkeleton;
+
+    // D-73: UTILITY is recognised but has no merchant-buildable form yet.
+    if (!CREATABLE_SKELETONS.has(skeleton)) {
+      throw new UnprocessableEntityException({
+        error_code: 'SKELETON_NOT_AVAILABLE_FOR_CREATE',
+        message: `The ${skeleton} skeleton has no merchant-buildable form yet.`,
+      });
+    }
+
+    const doc = minimalLayoutSchema(skeleton);
+    // Defence in depth — the built document is D-31-valid by construction, but
+    // it goes through the same validator every other write path uses.
+    const issues = validateLayoutSchema(doc, BLOCK_MANIFEST);
+    if (issues.length > 0) {
+      throw new UnprocessableEntityException({ error_code: 'INVALID_LAYOUT_SCHEMA', issues });
+    }
+
+    try {
+      return await this.prisma.template.create({
+        data: {
+          merchantId,
+          name,
+          billType,
+          skeleton,
+          layoutSchema: doc as unknown as Prisma.InputJsonValue,
+          version: 1,
+          parentTemplateId: null,
+          isHead: true,
+        },
+      });
+    } catch (err) {
+      // D-73: a name the merchant already holds is a 409 — no auto-suffix
+      // (D-63's allocator is Save As / rename / restore only). One shot, no retry.
+      if (isTemplateNameConflict(err)) {
+        throw new ConflictException(TEMPLATE_NAME_TAKEN);
+      }
+      throw err;
+    }
   }
 
   // C-3: set-default. Target must be within read-scope (C-1) and a live,

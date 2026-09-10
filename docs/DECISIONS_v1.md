@@ -592,3 +592,73 @@ Auto-suffixing on restore rather than refusing is chosen because refusal puts th
 **Runner-up, rejected:** allowing `STORE_STAFF` the masked projection only. It is defensible — masked data is what they already see in the list — but it produces four permission states on one route (two roles × two projections), and a permission matrix is exactly the kind of thing that is easy to write and hard to verify. One rule, verified once by A-6's real `STORE_STAFF` principal, is worth more than a slightly more generous one that nobody can hold in their head.
 
 **Consequence:** D-50's role gates become load-bearing for a data-egress path for the first time, having been written and never exercised since A-3. A-6's second seeded user is what proves them, and X-4 re-proves them.
+### D-72 · Save As from the UTILITY starter is a deliberate D-31 422 until a utility body block exists
+
+**Decision:** `POST /portal/templates/:id/save-as` runs the edited document
+through `validateLayoutSchema` before persisting, exactly as `save()` does.
+Because the UTILITY starter (D-67) deliberately ships without a visible
+`ITEMS`/`CHARGES` block, Save As from `seed-template-utility` — the first
+merchant-initiated write routed through the real validator, since seeding and
+the old `clone()` both bypassed it — is rejected with
+`422 INVALID_LAYOUT_SCHEMA` whose issue message is D-31's rule verbatim,
+"A visible ITEMS or CHARGES block is required". No seed change, no new block,
+no validator change. This stands until the utility-data-model phase adds a
+real body block (or teaches D-31 that `TARIFF_SLABS` satisfies the body
+requirement), at which point the starter becomes Save-As-able with no
+F-series change.
+
+**Reason:** F-2's row required the UTILITY spine gap to be *resolved* before
+Save As could ship, and named two acceptable resolutions — succeed validated,
+or "fail with a clear D-31-named error, not a silent/confusing rejection".
+The alternatives were weighed and set aside:
+
+- **Adding a real body block to the UTILITY seed** means either a visible
+  `ITEMS` (which renders "Payment received / Amount unavailable" — it
+  contradicts D-67's "renders nothing") or a new dataless `CHARGES` manifest
+  entry + renderer branch + tests, an I-1-shaped addition on top of an already
+  Tier-1 task, and it forces the deferred call on whether `CHARGES` is the
+  real §4.3 charges block (needs the utility data model and GST-exempt tax
+  treatment) or a second stub competing with `TARIFF_SLABS`.
+- **Special-casing UTILITY in the validator** weakens D-31 for one skeleton;
+  the clean form (teach D-31 that `TARIFF_SLABS` is a valid body) is still a
+  validator change and belongs to the phase that gives `TARIFF_SLABS` real
+  data.
+
+The 422 is also the more honest outcome: a UTILITY template a merchant could
+Save As today would render HEADER + FOOTER and nothing else — a broken
+document. The five other starters all carry a visible `ITEMS`, so Save As
+from them is unaffected.
+
+**Consequence:** F-8's builder, opening the UTILITY starter and hitting Save
+As, surfaces the server's named `INVALID_LAYOUT_SCHEMA` error telling the
+merchant exactly which block is missing — no special client wording (F-2 Q7).
+
+### D-73 · Create-from-scratch excludes UTILITY, and a name collision is a 409, not an auto-suffix
+
+**Decision:** `POST /portal/templates` accepts `skeleton` ∈ { MINIMALIST,
+COMPACT_THERMAL, TAX_COMPLIANT, RETAIL, RESTAURANT } only. `skeleton: 'UTILITY'`
+is rejected with `422 SKELETON_NOT_AVAILABLE_FOR_CREATE`; an unrecognised value
+gets `422 INVALID_SKELETON`. A `name` already held by one of the merchant's
+live head templates is rejected with `409 TEMPLATE_NAME_TAKEN` — the F-1
+allocator's `(1)`/`(2)` suffixing is **not** applied here.
+
+**Reason — UTILITY:** D-66's minimal document is a visible HEADER + a visible
+ITEMS. On a UTILITY skeleton that document passes `validateLayoutSchema`
+mechanically but is broken by design: TEMPLATE_SYSTEM_v2 §4.3 has no ITEMS on
+a utility bill, an ITEMS block renders "Amount unavailable", and there is no
+dataless block to replace it with (TARIFF_SLABS does not satisfy D-31; CHARGES
+has no manifest entry). This is the exact dead end D-72 identified for Save As
+from `seed-template-utility`; this decision applies the same reasoning here
+rather than take the same shortcut — fake an ITEMS block — a second time.
+Until the utility data model exists, UTILITY is uniformly "declared but not
+merchant-usable" from both the Save As and the create-from-scratch paths.
+
+**Reason — name collision:** D-63 lists the allocator's consumers as "Save
+As, rename via Save, and restore" and deliberately omits create. The
+auto-suffix rationale (refusal traps a merchant renaming a template they can
+no longer see) does not apply here: the merchant is in the create form itself
+and can simply retype the name against a clear error.
+
+**Reversal:** the utility-data-model phase that adds a real utility body
+block removes this UTILITY rejection, D-72's Save-As 422, and unblocks a real
+UTILITY option in F-8's skeleton picker — one coherent unlock.
