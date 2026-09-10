@@ -1,6 +1,7 @@
 import { ConflictException, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { SaveTemplateBody, TemplatesService } from './templates.service';
+import { MAX_NAME_ALLOCATION_RETRIES, SaveTemplateBody, TemplatesService } from './templates.service';
 
 // A-4: merchantId is now a parameter, resolved by the caller (DemoOnlyGuard
 // today) — this is the test's own stand-in for that, not read by the service.
@@ -49,6 +50,7 @@ describe('TemplatesService', () => {
   let merchantUpdate: jest.Mock;
   let merchantFindUnique: jest.Mock;
   let txTemplateUpdateMany: jest.Mock;
+  let txTemplateFindFirst: jest.Mock;
   let txTemplateCreate: jest.Mock;
   let txMerchantUpdateMany: jest.Mock;
   let transactionFn: jest.Mock;
@@ -63,12 +65,14 @@ describe('TemplatesService', () => {
     merchantFindUnique = jest.fn().mockResolvedValue({ id: 'seed-merchant-demo', defaultReceiptTemplateId: 'some-other-template' });
 
     txTemplateUpdateMany = jest.fn().mockResolvedValue({ count: 1 });
+    // F-1: allocateName's probe — null = the candidate name is free.
+    txTemplateFindFirst = jest.fn().mockResolvedValue(null);
     txTemplateCreate = jest.fn().mockImplementation(({ data }) => Promise.resolve({ id: 'tpl-forked', ...data }));
     txMerchantUpdateMany = jest.fn().mockResolvedValue({ count: 0 });
 
     transactionFn = jest.fn().mockImplementation((cb) =>
       cb({
-        template: { updateMany: txTemplateUpdateMany, create: txTemplateCreate },
+        template: { updateMany: txTemplateUpdateMany, findFirst: txTemplateFindFirst, create: txTemplateCreate },
         merchant: { updateMany: txMerchantUpdateMany },
       }),
     );
@@ -235,6 +239,64 @@ describe('TemplatesService', () => {
       await expect(service.save(PARENT_TEMPLATE.id, VALID_BODY, MERCHANT_ID)).rejects.toThrow(ConflictException);
       expect(txTemplateCreate).not.toHaveBeenCalled();
       expect(txMerchantUpdateMany).not.toHaveBeenCalled();
+    });
+
+    // ---- F-1: optional rename ----
+
+    it('no `name` → keeps the parent name, opens exactly one transaction, and never probes the allocator', async () => {
+      await service.save(PARENT_TEMPLATE.id, VALID_BODY, MERCHANT_ID);
+
+      expect(transactionFn).toHaveBeenCalledTimes(1);
+      expect(txTemplateFindFirst).not.toHaveBeenCalled();
+      expect(txTemplateCreate).toHaveBeenCalledWith({ data: expect.objectContaining({ name: PARENT_TEMPLATE.name }) });
+    });
+
+    it('a `name` → allocator probes for a free name INSIDE the transaction and the forked row carries it', async () => {
+      await service.save(PARENT_TEMPLATE.id, { ...VALID_BODY, name: 'Renamed Template' }, MERCHANT_ID);
+
+      expect(txTemplateFindFirst).toHaveBeenCalledWith({
+        where: { merchantId: PARENT_TEMPLATE.merchantId, name: 'Renamed Template', isHead: true },
+        select: { id: true },
+      });
+      expect(txTemplateCreate).toHaveBeenCalledWith({ data: expect.objectContaining({ name: 'Renamed Template' }) });
+    });
+
+    it('a `name` is trimmed before allocation', async () => {
+      await service.save(PARENT_TEMPLATE.id, { ...VALID_BODY, name: '  Padded  ' }, MERCHANT_ID);
+      expect(txTemplateCreate).toHaveBeenCalledWith({ data: expect.objectContaining({ name: 'Padded' }) });
+    });
+
+    it.each(['   ', 42, ''])('rejects a blank/non-string `name` (%p) before opening a transaction — zero writes', async (bad) => {
+      await expect(service.save(PARENT_TEMPLATE.id, { ...VALID_BODY, name: bad as never }, MERCHANT_ID)).rejects.toThrow(
+        UnprocessableEntityException,
+      );
+      expect(transactionFn).not.toHaveBeenCalled();
+    });
+
+    function fakeNameP2002() {
+      return new Prisma.PrismaClientKnownRequestError('unique violation', {
+        code: 'P2002',
+        clientVersion: 'test',
+        meta: { target: 'Template_merchantId_name_head_key' },
+      });
+    }
+
+    it('the P2002 retry is bounded — a permanently conflicting name fails cleanly after exactly MAX_NAME_ALLOCATION_RETRIES attempts, never loops', async () => {
+      txTemplateCreate.mockRejectedValue(fakeNameP2002());
+
+      const err = await service.save(PARENT_TEMPLATE.id, { ...VALID_BODY, name: 'Always Taken' }, MERCHANT_ID).catch((e) => e);
+      expect(err).toBeInstanceOf(ConflictException);
+      expect((err as ConflictException).getResponse()).toMatchObject({ error_code: 'TEMPLATE_NAME_TAKEN' });
+      expect(transactionFn).toHaveBeenCalledTimes(MAX_NAME_ALLOCATION_RETRIES);
+    });
+
+    it('a no-name save does NOT retry on P2002 — it surfaces the 409 on the first attempt (retrying the parent name would loop)', async () => {
+      txTemplateCreate.mockRejectedValue(fakeNameP2002());
+
+      const err = await service.save(PARENT_TEMPLATE.id, VALID_BODY, MERCHANT_ID).catch((e) => e);
+      expect(err).toBeInstanceOf(ConflictException);
+      expect((err as ConflictException).getResponse()).toMatchObject({ error_code: 'TEMPLATE_NAME_TAKEN' });
+      expect(transactionFn).toHaveBeenCalledTimes(1);
     });
   });
 

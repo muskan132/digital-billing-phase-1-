@@ -12,7 +12,7 @@
 import { ConflictException, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
 import { Prisma, PrismaClient } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { TemplatesService } from './templates.service';
+import { MAX_NAME_ALLOCATION_RETRIES, TemplatesService } from './templates.service';
 
 const prisma = new PrismaClient();
 const service = new TemplatesService(prisma as unknown as PrismaService);
@@ -347,3 +347,97 @@ async function createOwnTemplateWithName(merchant: ScratchMerchant, name: string
     },
   });
 }
+
+// F-1 (D-62/D-63): the name allocator + rename on save. Real Postgres only —
+// the concurrent-race guarantee cannot be proven with a mocked client.
+describe('F-1: name allocation + rename on save (real DB)', () => {
+  let merchant: ScratchMerchant;
+
+  const SAVE_BODY = {
+    layoutSchema: {
+      blocks: [
+        { id: 'blk_1', type: 'HEADER', order: 1, props: {}, visible: true, width: 'full' },
+        { id: 'blk_2', type: 'ITEMS', order: 2, props: {}, visible: true, width: 'full' },
+      ],
+    },
+  };
+
+  beforeAll(async () => {
+    merchant = await createScratchMerchant();
+  });
+
+  afterAll(async () => {
+    await cleanupMerchant(merchant);
+  });
+
+  it('save with NO name preserves the parent name exactly — existing callers unaffected', async () => {
+    const parent = await createOwnTemplateWithName(merchant, 'F-1 keep name', true, uniqueId('tpl'));
+    const forked = await service.save(parent.id, SAVE_BODY, merchant.merchantId);
+    expect(forked.name).toBe('F-1 keep name');
+    expect(forked.isHead).toBe(true);
+    expect((await prisma.template.findUniqueOrThrow({ where: { id: parent.id } })).isHead).toBe(false);
+  });
+
+  it('save with a TAKEN name yields the "(1)" suffix; the taken name and the new one are both live heads', async () => {
+    await createOwnTemplateWithName(merchant, 'F-1 taken', true, uniqueId('tpl'));
+    const other = await createOwnTemplateWithName(merchant, 'F-1 other lineage', true, uniqueId('tpl'));
+
+    const forked = await service.save(other.id, { ...SAVE_BODY, name: 'F-1 taken' }, merchant.merchantId);
+    expect(forked.name).toBe('F-1 taken (1)');
+
+    const liveHeadNames = (
+      await prisma.template.findMany({
+        where: { merchantId: merchant.merchantId, isHead: true, name: { in: ['F-1 taken', 'F-1 taken (1)'] } },
+        select: { name: true },
+      })
+    )
+      .map((t) => t.name)
+      .sort();
+    expect(liveHeadNames).toEqual(['F-1 taken', 'F-1 taken (1)']);
+  });
+
+  it('renaming a lineage to its OWN current name keeps that name (no suffix) — the allocator runs after the parent leaves the index', async () => {
+    const parent = await createOwnTemplateWithName(merchant, 'F-1 rename to self', true, uniqueId('tpl'));
+    const forked = await service.save(parent.id, { ...SAVE_BODY, name: 'F-1 rename to self' }, merchant.merchantId);
+    expect(forked.name).toBe('F-1 rename to self');
+  });
+
+  it('two concurrent saves racing for the same name (real Postgres, not mocked) both succeed with DISTINCT names', async () => {
+    const a = await createOwnTemplateWithName(merchant, 'F-1 race src A', true, uniqueId('tpl'));
+    const b = await createOwnTemplateWithName(merchant, 'F-1 race src B', true, uniqueId('tpl'));
+
+    const [ra, rb] = await Promise.all([
+      service.save(a.id, { ...SAVE_BODY, name: 'F-1 race' }, merchant.merchantId),
+      service.save(b.id, { ...SAVE_BODY, name: 'F-1 race' }, merchant.merchantId),
+    ]);
+
+    expect(new Set([ra.name, rb.name])).toEqual(new Set(['F-1 race', 'F-1 race (1)']));
+    expect(ra.isHead).toBe(true);
+    expect(rb.isHead).toBe(true);
+    // Both are live, distinct rows.
+    const liveHeads = await prisma.template.count({
+      where: { merchantId: merchant.merchantId, isHead: true, name: { in: ['F-1 race', 'F-1 race (1)'] } },
+    });
+    expect(liveHeads).toBe(2);
+  });
+
+  it('the retry is bounded — a forced permanent conflict fails cleanly after exactly MAX_NAME_ALLOCATION_RETRIES attempts, does not loop', async () => {
+    await createOwnTemplateWithName(merchant, 'F-1 perma', true, uniqueId('tpl'));
+    const src = await createOwnTemplateWithName(merchant, 'F-1 bounded src', true, uniqueId('tpl'));
+
+    // Force every attempt's allocator output to a name that is already a live
+    // head, so every insert hits the real index's P2002.
+    const spy = jest.spyOn(service as unknown as { allocateName: () => Promise<string> }, 'allocateName').mockResolvedValue('F-1 perma');
+    try {
+      const err = await service.save(src.id, { ...SAVE_BODY, name: 'anything' }, merchant.merchantId).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(ConflictException);
+      expect((err as ConflictException).getResponse()).toMatchObject({ error_code: 'TEMPLATE_NAME_TAKEN' });
+      expect(spy).toHaveBeenCalledTimes(MAX_NAME_ALLOCATION_RETRIES);
+    } finally {
+      spy.mockRestore();
+    }
+
+    // The forced-conflict src lineage never produced a new head.
+    expect((await prisma.template.findUniqueOrThrow({ where: { id: src.id } })).isHead).toBe(true);
+  });
+});

@@ -12,7 +12,23 @@ export interface SaveTemplateBody {
   // Defaults false so every existing/future caller that doesn't pass it gets
   // today's behaviour (parent kept, just no longer head).
   archivePrevious?: boolean;
+  // F-1 (D-62/D-63): optional in-place rename within the lineage. ABSENT (the
+  // only shape every existing caller sends) keeps the parent's name exactly and
+  // runs no allocation at all. Present: the F-1 allocator resolves the first
+  // free name (`<name>`, then `<name> (1)`, `(2)`, ...) and a bounded P2002
+  // retry absorbs a concurrent allocation racing for it.
+  name?: string;
 }
+
+// F-1 (D-63): "retry, not count-then-insert". allocateName's probe and the
+// forked-row insert are not atomic, so a concurrent save can take the name in
+// between — caught as P2002 and retried with a fresh allocation. Bounded so a
+// pathological/forced permanent conflict fails cleanly instead of looping.
+export const MAX_NAME_ALLOCATION_RETRIES = 5;
+// Safety ceiling on the suffix search itself — a merchant is never expected to
+// hold anywhere near this many same-named live templates; hitting it means
+// something is wrong, so it throws rather than scanning unbounded.
+const MAX_NAME_SUFFIX = 999;
 
 // S-10/D-60: mechanical dispatch only — which of the two Merchant default
 // pointers a template's billType maps to. Not F-6's product surface (no new
@@ -114,6 +130,13 @@ export class TemplatesService {
     }
     const archivePrevious = body.archivePrevious ?? false;
 
+    // F-1: a rename must name something. Absent is the untouched path; present
+    // must be a non-blank string. Trimmed so " Foo " and "Foo" are one name.
+    if (body.name !== undefined && (typeof body.name !== 'string' || body.name.trim().length === 0)) {
+      throw new UnprocessableEntityException({ error_code: 'MALFORMED_REQUEST', message: 'name must be a non-empty string when provided' });
+    }
+    const requestedName = body.name?.trim();
+
     // Same merchant/library read-scope as findOne, but the write scope is
     // narrower: only the merchant's OWN head templates are forkable here.
     const parent = await this.prisma.template.findFirst({
@@ -153,54 +176,101 @@ export class TemplatesService {
       throw new UnprocessableEntityException({ error_code: 'INVALID_LAYOUT_SCHEMA', issues });
     }
 
-    try {
-      return await this.prisma.$transaction(async (tx) => {
-        // Concurrency guard: if isHead flipped since the read above (a
-        // concurrent save/archive), this matches zero rows — abort rather than
-        // create a second head on top of one already forked.
-        const flipped = await tx.template.updateMany({
-          where: { id: parent.id, isHead: true },
-          data: { isHead: false, ...(archivePrevious ? { archivedAt: new Date() } : {}) },
+    // F-1: no `name` → one attempt, keep the parent's name, no allocation at
+    // all (every existing caller lands here, unchanged). With a `name`, the
+    // allocator runs inside the transaction and a P2002 from a concurrent
+    // allocation is retried with a fresh allocation, bounded (D-63).
+    const maxAttempts = requestedName === undefined ? 1 : MAX_NAME_ALLOCATION_RETRIES;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        return await this.prisma.$transaction(async (tx) => {
+          // Concurrency guard: if isHead flipped since the read above (a
+          // concurrent save/archive), this matches zero rows — abort rather than
+          // create a second head on top of one already forked.
+          const flipped = await tx.template.updateMany({
+            where: { id: parent.id, isHead: true },
+            data: { isHead: false, ...(archivePrevious ? { archivedAt: new Date() } : {}) },
+          });
+          if (flipped.count !== 1) {
+            throw new ConflictException({ error_code: 'TEMPLATE_HEAD_CHANGED' });
+          }
+
+          // Allocated AFTER the flip, so renaming a lineage to its own current
+          // name resolves to that name (the parent has just left the index's
+          // scope), not `<name> (1)`.
+          const name = requestedName === undefined ? parent.name : await this.allocateName(tx, parentMerchantId, requestedName);
+
+          const forked = await tx.template.create({
+            data: {
+              merchantId: parentMerchantId,
+              name,
+              billType: parent.billType,
+              skeleton: parent.skeleton,
+              layoutSchema: doc as unknown as Prisma.InputJsonValue,
+              version: parent.version + 1,
+              parentTemplateId: parent.id,
+              isHead: true,
+            },
+          });
+
+          // Unconditional match-or-no-op — repoints the default only if it
+          // actually pointed at the parent, atomically with the flip/archive above.
+          // S-10/D-60: dispatched to the pointer matching the parent's own
+          // billType, so forking a TAX_INVOICE template can never repoint the
+          // RECEIPT pointer the callback path trusts, or vice versa.
+          const defaultColumn = defaultColumnFor(parent.billType);
+          await tx.merchant.updateMany({
+            where: { id: parentMerchantId, [defaultColumn]: parent.id },
+            data: { [defaultColumn]: forked.id },
+          });
+
+          return forked;
         });
-        if (flipped.count !== 1) {
-          throw new ConflictException({ error_code: 'TEMPLATE_HEAD_CHANGED' });
+      } catch (err) {
+        if (isTemplateNameConflict(err)) {
+          // F-1: with a requested name, a concurrent allocation beat us to it —
+          // re-allocate and retry, bounded. A no-name save (or the final retry)
+          // surfaces S-11's named 409 rather than a raw P2002/500.
+          if (requestedName !== undefined && attempt < maxAttempts) {
+            continue;
+          }
+          throw new ConflictException(TEMPLATE_NAME_TAKEN);
         }
-
-        const forked = await tx.template.create({
-          data: {
-            merchantId: parentMerchantId,
-            name: parent.name,
-            billType: parent.billType,
-            skeleton: parent.skeleton,
-            layoutSchema: doc as unknown as Prisma.InputJsonValue,
-            version: parent.version + 1,
-            parentTemplateId: parent.id,
-            isHead: true,
-          },
-        });
-
-        // Unconditional match-or-no-op — repoints the default only if it
-        // actually pointed at the parent, atomically with the flip/archive above.
-        // S-10/D-60: dispatched to the pointer matching the parent's own
-        // billType, so forking a TAX_INVOICE template can never repoint the
-        // RECEIPT pointer the callback path trusts, or vice versa.
-        const defaultColumn = defaultColumnFor(parent.billType);
-        await tx.merchant.updateMany({
-          where: { id: parentMerchantId, [defaultColumn]: parent.id },
-          data: { [defaultColumn]: forked.id },
-        });
-
-        return forked;
-      });
-    } catch (err) {
-      // S-11 (D-63): the merchant already has a live head template by this name
-      // in a DIFFERENT lineage (today only reachable by cloning the same starter
-      // twice — F-2 removes that path). Surface a named 409, not a raw P2002/500.
-      if (isTemplateNameConflict(err)) {
-        throw new ConflictException(TEMPLATE_NAME_TAKEN);
+        throw err;
       }
-      throw err;
     }
+
+    // The loop returns on success and throws on its final attempt; this is only
+    // here to satisfy the type checker.
+    throw new ConflictException(TEMPLATE_NAME_TAKEN);
+  }
+
+  // F-1 (D-63): the name allocator. Returns the first name not held by one of
+  // this merchant's LIVE HEAD templates — the desired name itself, then
+  // `<name> (1)`, `(2)`, ... Archived rows keep isHead = true (D-65), so a name
+  // reserved by an archived template counts as taken.
+  //
+  // Called INSIDE save()'s transaction with the `tx` client, AFTER the parent's
+  // isHead has been flipped — see the call site. Not atomic with the caller's
+  // insert on its own: save()'s bounded P2002 retry is what closes the window
+  // between the probe here and the create (D-63: "retry, not count-then-
+  // insert"). F-2 (Save As) and F-5 (restore) reuse this method.
+  private async allocateName(tx: Prisma.TransactionClient, merchantId: string, desiredName: string): Promise<string> {
+    for (let n = 0; n <= MAX_NAME_SUFFIX; n++) {
+      const candidate = n === 0 ? desiredName : `${desiredName} (${n})`;
+      const taken = await tx.template.findFirst({
+        where: { merchantId, name: candidate, isHead: true },
+        select: { id: true },
+      });
+      if (!taken) {
+        return candidate;
+      }
+    }
+    throw new ConflictException({
+      error_code: 'TEMPLATE_NAME_ALLOCATION_EXHAUSTED',
+      message: `Could not find a free name for "${desiredName}" within ${MAX_NAME_SUFFIX} suffixes.`,
+    });
   }
 
   // C-3: clone-from-library — a genuine deep copy, never a reference (D-33 /
