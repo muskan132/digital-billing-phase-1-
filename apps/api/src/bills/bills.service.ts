@@ -265,7 +265,7 @@ export class BillsService {
     return { created: true, body: this.toResponseBody(order.bill!, order.link!) };
   }
 
-  // D-13, extended to TAX_INVOICE: Merchant.defaultTemplateId points at the RECEIPT
+  // D-13, extended to TAX_INVOICE: Merchant.defaultReceiptTemplateId points at the RECEIPT
   // template (D-13's v1 behaviour, unchanged) and can't be reused here. A caller-supplied
   // template_id is honoured only if it resolves to a TAX_INVOICE template visible to this
   // merchant (its own, or the shared library); otherwise, or if absent, fall back —

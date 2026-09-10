@@ -3,7 +3,9 @@
 // tenant (exactly one new row, correct merchantId, parent isHead flipped,
 // defaultTemplateId repointed, all in one transaction — D-32), and
 // cross-merchant 404 across every id-taking builder route (D-47), not just
-// the read ones H-1/H-3 already covered. Mirrors the mocked/integration
+// the read ones H-1/H-3 already covered. defaultTemplateId is now split
+// (S-10/D-60) — this test's template is billType RECEIPT throughout, so it
+// exercises defaultReceiptTemplateId. Mirrors the mocked/integration
 // split H-1 established — portal-templates.controller.spec.ts (mocked +
 // real-HTTP role-gate structural test) covers scoping/DTO/role wiring;
 // this file is real Postgres only.
@@ -69,7 +71,7 @@ describe('TemplatesService.save — fork-on-write against a REAL, non-seeded ten
 
   it('forking the merchant\'s own head template creates exactly one new row, merchantId = the SESSION merchant (not the seed), parent flipped, default repointed', async () => {
     const parent = await createOwnTemplate(merchant);
-    await prisma.merchant.update({ where: { id: merchant.merchantId }, data: { defaultTemplateId: parent.id } });
+    await prisma.merchant.update({ where: { id: merchant.merchantId }, data: { defaultReceiptTemplateId: parent.id } });
 
     const beforeCount = await prisma.template.count({ where: { merchantId: merchant.merchantId } });
 
@@ -97,7 +99,7 @@ describe('TemplatesService.save — fork-on-write against a REAL, non-seeded ten
     expect(parentRow.isHead).toBe(false);
 
     const merchantRow = await prisma.merchant.findUniqueOrThrow({ where: { id: merchant.merchantId } });
-    expect(merchantRow.defaultTemplateId).toBe(forked.id);
+    expect(merchantRow.defaultReceiptTemplateId).toBe(forked.id);
   });
 });
 

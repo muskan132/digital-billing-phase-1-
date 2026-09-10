@@ -83,7 +83,7 @@ async function main() {
 
     if (!order?.link) {
       console.error(
-        'Callback accepted but no Link was created — check the API logs (e.g. missing merchant.defaultTemplate).',
+        'Callback accepted but no Link was created — check the API logs (e.g. missing merchant.defaultReceiptTemplate).',
       );
       process.exit(1);
     }

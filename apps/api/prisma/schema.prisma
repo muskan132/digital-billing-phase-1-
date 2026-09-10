@@ -30,6 +30,7 @@ enum TemplateSkeleton {
   TAX_COMPLIANT
   RETAIL
   RESTAURANT
+  UTILITY
 }
 
 enum OrderStatus {
@@ -66,9 +67,11 @@ model Merchant {
   users             User[]
   templates         Template[]
   orders            Order[]
-  defaultChannel    Channel    @default(EMAIL)
-  defaultTemplateId String?
-  defaultTemplate   Template?  @relation("MerchantDefault", fields: [defaultTemplateId], references: [id])
+  defaultChannel               Channel    @default(EMAIL)
+  defaultReceiptTemplateId     String?
+  defaultReceiptTemplate       Template?  @relation("MerchantDefaultReceipt", fields: [defaultReceiptTemplateId], references: [id])
+  defaultTaxInvoiceTemplateId  String?
+  defaultTaxInvoiceTemplate    Template?  @relation("MerchantDefaultTaxInvoice", fields: [defaultTaxInvoiceTemplateId], references: [id])
   addressLine1      String?
   addressLine2      String?
   city              String?
@@ -80,6 +83,7 @@ model Merchant {
   supportPhone      String?
   apiKeys           MerchantApiKey[]
   bills             Bill[]
+  piiExportAudits   PiiExportAudit[]
   createdAt         DateTime   @default(now())
 }
 
@@ -94,6 +98,7 @@ model User {
   disabledAt  DateTime?                 // v4 (D-45): soft disable, re-checked on every request
   lastLoginAt DateTime?                 // v4: operational only, never an authorization input
   sessions    MerchantSession[]
+  piiExportAudits PiiExportAudit[]
   createdAt   DateTime          @default(now())
 }
 
@@ -124,7 +129,8 @@ model Template {
   isHead            Boolean          @default(true)
   archivedAt        DateTime?
   bills             Bill[]
-  defaultOf         Merchant[]       @relation("MerchantDefault")
+  defaultOfReceipt     Merchant[]    @relation("MerchantDefaultReceipt")
+  defaultOfTaxInvoice  Merchant[]    @relation("MerchantDefaultTaxInvoice")
   createdAt         DateTime         @default(now())
   updatedAt         DateTime         @updatedAt
 
@@ -238,6 +244,25 @@ model MerchantApiKey {
   keyHash    Bytes
   status     ApiKeyStatus @default(ACTIVE)
   createdAt  DateTime     @default(now())
+
+  @@index([merchantId])
+}
+
+// D-70/D-71 (Phase 5, S-10): write path for exports only, not a general audit
+// log. Append-only — no update/delete/upsert method exists anywhere in the
+// codebase for this model; that absence of code paths is the only enforcement
+// today (D-70 names DB-level enforcement as an unresolved question, owner
+// Compliance + Security).
+model PiiExportAudit {
+  id                String   @id @default(cuid())
+  merchantId        String
+  merchant          Merchant @relation(fields: [merchantId], references: [id])
+  userId            String
+  user              User     @relation(fields: [userId], references: [id])
+  rowCount          Int
+  filters           Json
+  contactProjection String   // D-71: "masked" | "full" — the projection actually produced
+  createdAt         DateTime @default(now())
 
   @@index([merchantId])
 }

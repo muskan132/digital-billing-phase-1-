@@ -15,7 +15,7 @@ describe('CallbacksService.persist — Bill.snapshot whitelist', () => {
           id: 'merchant_1',
           name: 'Test Merchant',
           defaultChannel: 'EMAIL',
-          defaultTemplate: {
+          defaultReceiptTemplate: {
             id: 'template_1',
             billType: 'RECEIPT',
             skeleton: 'MINIMALIST',
@@ -62,11 +62,11 @@ describe('CallbacksService.persist — Bill.snapshot whitelist', () => {
     );
   });
 
-  // TEMPLATE_SYSTEM_v2 §7: the resolved defaultTemplate's render spec must be frozen
+  // TEMPLATE_SYSTEM_v2 §7: the resolved defaultReceiptTemplate's render spec must be frozen
   // onto the bill at creation, independent of the live Template row afterward.
-  it('freezes the resolved defaultTemplate render spec into Bill.layoutSnapshot', async () => {
+  it('freezes the resolved defaultReceiptTemplate render spec into Bill.layoutSnapshot', async () => {
     const upsert = jest.fn().mockResolvedValue(undefined);
-    const defaultTemplate = {
+    const defaultReceiptTemplate = {
       id: 'template_1',
       billType: 'RECEIPT',
       skeleton: 'MINIMALIST',
@@ -79,7 +79,7 @@ describe('CallbacksService.persist — Bill.snapshot whitelist', () => {
           id: 'merchant_1',
           name: 'Test Merchant',
           defaultChannel: 'EMAIL',
-          defaultTemplate,
+          defaultReceiptTemplate,
         }),
       },
       order: { upsert },
@@ -104,10 +104,10 @@ describe('CallbacksService.persist — Bill.snapshot whitelist', () => {
     const layoutSnapshot = upsert.mock.calls[0][0].create.bill.create.layoutSnapshot;
     expect(layoutSnapshot).toEqual({
       schemaVersion: 1,
-      skeleton: defaultTemplate.skeleton,
-      blocks: defaultTemplate.layoutSchema,
-      templateId: defaultTemplate.id,
-      templateVersion: defaultTemplate.version,
+      skeleton: defaultReceiptTemplate.skeleton,
+      blocks: defaultReceiptTemplate.layoutSchema,
+      templateId: defaultReceiptTemplate.id,
+      templateVersion: defaultReceiptTemplate.version,
     });
   });
 
@@ -122,7 +122,7 @@ describe('CallbacksService.persist — Bill.snapshot whitelist', () => {
           id: 'merchant_1',
           name: 'Test Merchant',
           defaultChannel: 'EMAIL',
-          defaultTemplate: {
+          defaultReceiptTemplate: {
             id: 'template_1',
             billType: 'RECEIPT',
             skeleton: 'MINIMALIST',

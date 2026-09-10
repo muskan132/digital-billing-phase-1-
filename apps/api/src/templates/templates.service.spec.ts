@@ -16,6 +16,7 @@ const LIBRARY_TEMPLATE = {
 const MERCHANT_OWNED_TEMPLATE = {
   id: 'tpl-merchant-owned',
   merchantId: 'seed-merchant-demo',
+  billType: 'RECEIPT',
   isHead: true,
   archivedAt: null,
 };
@@ -59,7 +60,7 @@ describe('TemplatesService', () => {
     templateCreate = jest.fn().mockImplementation(({ data }) => Promise.resolve({ id: 'tpl-cloned', ...data }));
     templateUpdate = jest.fn().mockImplementation(({ where, data }) => Promise.resolve({ id: where.id, ...data }));
     merchantUpdate = jest.fn().mockImplementation(({ where, data }) => Promise.resolve({ id: where.id, ...data }));
-    merchantFindUnique = jest.fn().mockResolvedValue({ id: 'seed-merchant-demo', defaultTemplateId: 'some-other-template' });
+    merchantFindUnique = jest.fn().mockResolvedValue({ id: 'seed-merchant-demo', defaultReceiptTemplateId: 'some-other-template' });
 
     txTemplateUpdateMany = jest.fn().mockResolvedValue({ count: 1 });
     txTemplateCreate = jest.fn().mockImplementation(({ data }) => Promise.resolve({ id: 'tpl-forked', ...data }));
@@ -178,12 +179,13 @@ describe('TemplatesService', () => {
       });
     });
 
-    it('repoints Merchant.defaultTemplateId unconditionally by where-clause match (no separate read)', async () => {
+    it('repoints Merchant.defaultTaxInvoiceTemplateId unconditionally by where-clause match, dispatched from the parent billType (no separate read)', async () => {
+      // PARENT_TEMPLATE.billType is TAX_INVOICE (S-10/D-60 dispatch).
       await service.save(PARENT_TEMPLATE.id, VALID_BODY, MERCHANT_ID);
 
       expect(txMerchantUpdateMany).toHaveBeenCalledWith({
-        where: { id: PARENT_TEMPLATE.merchantId, defaultTemplateId: PARENT_TEMPLATE.id },
-        data: { defaultTemplateId: 'tpl-forked' },
+        where: { id: PARENT_TEMPLATE.merchantId, defaultTaxInvoiceTemplateId: PARENT_TEMPLATE.id },
+        data: { defaultTaxInvoiceTemplateId: 'tpl-forked' },
       });
     });
 
@@ -266,13 +268,23 @@ describe('TemplatesService', () => {
   });
 
   describe('setDefault (C-3)', () => {
-    it('repoints Merchant.defaultTemplateId at the given head template', async () => {
+    it('repoints Merchant.defaultReceiptTemplateId at the given head template, dispatched from its billType (S-10/D-60)', async () => {
       templateFindFirst.mockResolvedValue(MERCHANT_OWNED_TEMPLATE);
       await service.setDefault(MERCHANT_OWNED_TEMPLATE.id, MERCHANT_ID);
 
       expect(merchantUpdate).toHaveBeenCalledWith({
         where: { id: 'seed-merchant-demo' },
-        data: { defaultTemplateId: MERCHANT_OWNED_TEMPLATE.id },
+        data: { defaultReceiptTemplateId: MERCHANT_OWNED_TEMPLATE.id },
+      });
+    });
+
+    it('repoints Merchant.defaultTaxInvoiceTemplateId instead when the template is a TAX_INVOICE', async () => {
+      templateFindFirst.mockResolvedValue({ ...MERCHANT_OWNED_TEMPLATE, billType: 'TAX_INVOICE' });
+      await service.setDefault(MERCHANT_OWNED_TEMPLATE.id, MERCHANT_ID);
+
+      expect(merchantUpdate).toHaveBeenCalledWith({
+        where: { id: 'seed-merchant-demo' },
+        data: { defaultTaxInvoiceTemplateId: MERCHANT_OWNED_TEMPLATE.id },
       });
     });
 
@@ -292,7 +304,7 @@ describe('TemplatesService', () => {
   describe('archive (C-3)', () => {
     it('sets archivedAt on a merchant-owned head template that is not the current default', async () => {
       templateFindFirst.mockResolvedValue(MERCHANT_OWNED_TEMPLATE);
-      merchantFindUnique.mockResolvedValue({ id: 'seed-merchant-demo', defaultTemplateId: 'some-other-template' });
+      merchantFindUnique.mockResolvedValue({ id: 'seed-merchant-demo', defaultReceiptTemplateId: 'some-other-template' });
 
       const result = await service.archive(MERCHANT_OWNED_TEMPLATE.id, MERCHANT_ID);
 
@@ -305,7 +317,15 @@ describe('TemplatesService', () => {
 
     it('refuses to archive the current default, naming the reason, zero writes', async () => {
       templateFindFirst.mockResolvedValue(MERCHANT_OWNED_TEMPLATE);
-      merchantFindUnique.mockResolvedValue({ id: 'seed-merchant-demo', defaultTemplateId: MERCHANT_OWNED_TEMPLATE.id });
+      merchantFindUnique.mockResolvedValue({ id: 'seed-merchant-demo', defaultReceiptTemplateId: MERCHANT_OWNED_TEMPLATE.id });
+
+      await expect(service.archive(MERCHANT_OWNED_TEMPLATE.id, MERCHANT_ID)).rejects.toThrow(UnprocessableEntityException);
+      expect(templateUpdate).not.toHaveBeenCalled();
+    });
+
+    it('refuses to archive the current TAX_INVOICE default, dispatched from the template billType (S-10/D-60)', async () => {
+      templateFindFirst.mockResolvedValue({ ...MERCHANT_OWNED_TEMPLATE, billType: 'TAX_INVOICE' });
+      merchantFindUnique.mockResolvedValue({ id: 'seed-merchant-demo', defaultTaxInvoiceTemplateId: MERCHANT_OWNED_TEMPLATE.id });
 
       await expect(service.archive(MERCHANT_OWNED_TEMPLATE.id, MERCHANT_ID)).rejects.toThrow(UnprocessableEntityException);
       expect(templateUpdate).not.toHaveBeenCalled();
@@ -325,14 +345,16 @@ describe('TemplatesService', () => {
   });
 
   describe('getDefaultTemplateId (W-2)', () => {
-    it("returns the merchant's stored defaultTemplateId", async () => {
-      merchantFindUnique.mockResolvedValue({ defaultTemplateId: 'tpl-parent' });
+    // S-10/D-60: deliberately still the RECEIPT pointer only — unchanged
+    // dashboard DTO shape until F-6 builds the real two-pointer UI.
+    it("returns the merchant's stored defaultReceiptTemplateId", async () => {
+      merchantFindUnique.mockResolvedValue({ defaultReceiptTemplateId: 'tpl-parent' });
       await expect(service.getDefaultTemplateId(MERCHANT_ID)).resolves.toBe('tpl-parent');
-      expect(merchantFindUnique).toHaveBeenCalledWith({ where: { id: MERCHANT_ID }, select: { defaultTemplateId: true } });
+      expect(merchantFindUnique).toHaveBeenCalledWith({ where: { id: MERCHANT_ID }, select: { defaultReceiptTemplateId: true } });
     });
 
     it('returns null when the merchant has no default set', async () => {
-      merchantFindUnique.mockResolvedValue({ defaultTemplateId: null });
+      merchantFindUnique.mockResolvedValue({ defaultReceiptTemplateId: null });
       await expect(service.getDefaultTemplateId(MERCHANT_ID)).resolves.toBeNull();
     });
 

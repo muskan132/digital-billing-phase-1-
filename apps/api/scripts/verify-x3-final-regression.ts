@@ -106,7 +106,7 @@ async function cleanupMerchant(session: ScratchSession): Promise<void> {
   await prisma.order.deleteMany({ where: { merchantId: session.merchantId } });
   await prisma.merchantSession.deleteMany({ where: { userId: session.userId } });
   await prisma.user.deleteMany({ where: { id: session.userId } });
-  await prisma.merchant.update({ where: { id: session.merchantId }, data: { defaultTemplateId: null } }).catch(() => {});
+  await prisma.merchant.update({ where: { id: session.merchantId }, data: { defaultReceiptTemplateId: null } }).catch(() => {});
   await prisma.template.deleteMany({ where: { merchantId: session.merchantId } });
   await prisma.merchant.deleteMany({ where: { id: session.merchantId } });
 }
@@ -132,7 +132,7 @@ async function createOwnTemplate(session: ScratchSession, name: string) {
       layoutSchema: { schemaVersion: 2, skeleton: 'MINIMALIST', blocks: [] },
     },
   });
-  await prisma.merchant.update({ where: { id: session.merchantId }, data: { defaultTemplateId: template.id } });
+  await prisma.merchant.update({ where: { id: session.merchantId }, data: { defaultReceiptTemplateId: template.id } });
   return template;
 }
 
@@ -257,7 +257,9 @@ async function main() {
       console.log('PASS  POST .../clone -> 404, real re-SELECT confirms zero write');
     }
 
-    // -- POST .../set-default — 404-on-mutate, confirm A's OWN defaultTemplateId untouched.
+    // -- POST .../set-default — 404-on-mutate, confirm A's OWN default pointers untouched
+    // (S-10/D-60: the single defaultTemplateId column is now split in two — check both,
+    // since this probe doesn't care which one templateB's billType would have dispatched to).
     {
       const merchantABefore = await prisma.merchant.findUniqueOrThrow({ where: { id: merchantA.merchantId } });
       const token = await csrfToken(merchantA);
@@ -267,10 +269,13 @@ async function main() {
       });
       if (res.status !== 404) findingFail(`POST .../set-default — expected 404 for B's template as A, got ${res.status}`);
       const merchantAAfter = await prisma.merchant.findUniqueOrThrow({ where: { id: merchantA.merchantId } });
-      if (merchantAAfter.defaultTemplateId !== merchantABefore.defaultTemplateId) {
-        findingFail("POST .../set-default on B's template as A -> 404, but A's OWN defaultTemplateId changed anyway");
+      if (
+        merchantAAfter.defaultReceiptTemplateId !== merchantABefore.defaultReceiptTemplateId ||
+        merchantAAfter.defaultTaxInvoiceTemplateId !== merchantABefore.defaultTaxInvoiceTemplateId
+      ) {
+        findingFail("POST .../set-default on B's template as A -> 404, but A's OWN default pointer changed anyway");
       }
-      console.log("PASS  POST .../set-default -> 404, A's own defaultTemplateId unchanged");
+      console.log("PASS  POST .../set-default -> 404, A's own default pointers unchanged");
     }
 
     // -- POST .../archive — 404-on-mutate, confirm B's template archivedAt untouched.

@@ -326,7 +326,7 @@ async function main() {
 
   await prisma.merchant.update({
     where: { id: MERCHANT_ID },
-    data: { defaultTemplateId: TEMPLATE_RECEIPT_MINIMALIST_ID },
+    data: { defaultReceiptTemplateId: TEMPLATE_RECEIPT_MINIMALIST_ID },
   });
 
   // D-19: MerchantApiKey — keyPrefix plaintext for lookup, keyHash = SHA-256 of the full

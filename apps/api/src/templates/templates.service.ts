@@ -1,5 +1,5 @@
 import { ConflictException, Injectable, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { BillType, Prisma } from '@prisma/client';
 import { BLOCK_MANIFEST, LayoutSchemaV2, validateLayoutSchema } from '@digital-billing/block-manifest';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -12,6 +12,15 @@ export interface SaveTemplateBody {
   // Defaults false so every existing/future caller that doesn't pass it gets
   // today's behaviour (parent kept, just no longer head).
   archivePrevious?: boolean;
+}
+
+// S-10/D-60: mechanical dispatch only — which of the two Merchant default
+// pointers a template's billType maps to. Not F-6's product surface (no new
+// error codes, no new API shape): required now so that setDefault()/save()'s
+// auto-repoint/archive()'s refusal check don't corrupt the wrong pointer the
+// moment a TAX_INVOICE template exists (F-3).
+function defaultColumnFor(billType: BillType): 'defaultReceiptTemplateId' | 'defaultTaxInvoiceTemplateId' {
+  return billType === BillType.TAX_INVOICE ? 'defaultTaxInvoiceTemplateId' : 'defaultReceiptTemplateId';
 }
 
 @Injectable()
@@ -39,9 +48,12 @@ export class TemplatesService {
   // W-2: read-only lookup of the merchant's own stored default — no decision
   // logic here, just the same field setDefault()/archive() already write/read
   // elsewhere, exposed for the dashboard's "Create invoice" entry point.
+  // S-10/D-60: deliberately still the RECEIPT pointer only — the dashboard's
+  // single "Create invoice" shortcut and its DTO shape are unchanged until
+  // F-6 builds the real two-pointer UI.
   async getDefaultTemplateId(merchantId: string): Promise<string | null> {
-    const merchant = await this.prisma.merchant.findUnique({ where: { id: merchantId }, select: { defaultTemplateId: true } });
-    return merchant?.defaultTemplateId ?? null;
+    const merchant = await this.prisma.merchant.findUnique({ where: { id: merchantId }, select: { defaultReceiptTemplateId: true } });
+    return merchant?.defaultReceiptTemplateId ?? null;
   }
 
   // Same merchant/library scope as list(), but not restricted to isHead — a
@@ -141,9 +153,13 @@ export class TemplatesService {
 
       // Unconditional match-or-no-op — repoints the default only if it
       // actually pointed at the parent, atomically with the flip/archive above.
+      // S-10/D-60: dispatched to the pointer matching the parent's own
+      // billType, so forking a TAX_INVOICE template can never repoint the
+      // RECEIPT pointer the callback path trusts, or vice versa.
+      const defaultColumn = defaultColumnFor(parent.billType);
       await tx.merchant.updateMany({
-        where: { id: parentMerchantId, defaultTemplateId: parent.id },
-        data: { defaultTemplateId: forked.id },
+        where: { id: parentMerchantId, [defaultColumn]: parent.id },
+        data: { [defaultColumn]: forked.id },
       });
 
       return forked;
@@ -208,9 +224,12 @@ export class TemplatesService {
       throw new UnprocessableEntityException({ error_code: 'CANNOT_SET_NON_HEAD_AS_DEFAULT' });
     }
 
+    // S-10/D-60: dispatched to the pointer matching this template's own
+    // billType — mechanical dispatch only, not F-6's per-billType product
+    // surface (no new error codes, no response shape change here).
     return this.prisma.merchant.update({
       where: { id: merchantId },
-      data: { defaultTemplateId: template.id },
+      data: { [defaultColumnFor(template.billType)]: template.id },
     });
   }
 
@@ -232,8 +251,10 @@ export class TemplatesService {
       throw new UnprocessableEntityException({ error_code: 'CANNOT_ARCHIVE_NON_HEAD_VERSION' });
     }
 
+    // S-10/D-60: checked against the pointer matching this template's own
+    // billType — mechanical dispatch only, not F-6's product surface.
     const merchant = await this.prisma.merchant.findUnique({ where: { id: merchantId } });
-    if (merchant?.defaultTemplateId === id) {
+    if (merchant?.[defaultColumnFor(template.billType)] === id) {
       throw new UnprocessableEntityException({
         error_code: 'CANNOT_ARCHIVE_DEFAULT_TEMPLATE',
         message: 'This is the merchant\'s current default template — set a different default before archiving it.',

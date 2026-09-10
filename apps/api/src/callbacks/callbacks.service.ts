@@ -23,7 +23,7 @@ export class CallbacksService {
 
     const merchant = await this.prisma.merchant.findUnique({
       where: { jiopayMid: callback.merchantId },
-      include: { defaultTemplate: true },
+      include: { defaultReceiptTemplate: true },
     });
     if (!merchant) {
       this.logger.warn('Unknown merchantId — not persisted');
@@ -75,9 +75,9 @@ export class CallbacksService {
       return;
     }
 
-    if (!merchant.defaultTemplate) {
+    if (!merchant.defaultReceiptTemplate) {
       this.logger.warn(
-        `Merchant ${merchant.id} has no defaultTemplate configured — committing Order only (config error)`,
+        `Merchant ${merchant.id} has no defaultReceiptTemplate configured — committing Order only (config error)`,
       );
       await this.prisma.order.upsert({
         where: { txnId },
@@ -105,8 +105,8 @@ export class CallbacksService {
         bill: {
           create: {
             merchantId: merchant.id,
-            billType: merchant.defaultTemplate.billType,
-            templateId: merchant.defaultTemplate.id,
+            billType: merchant.defaultReceiptTemplate.billType,
+            templateId: merchant.defaultReceiptTemplate.id,
             totalPaise: amountPaise,
             currency: 'INR',
             snapshot: {
@@ -132,10 +132,10 @@ export class CallbacksService {
             // template — editing a template must never change how an issued bill renders.
             layoutSnapshot: {
               schemaVersion: 1,
-              skeleton: merchant.defaultTemplate.skeleton,
-              blocks: merchant.defaultTemplate.layoutSchema as Prisma.InputJsonValue,
-              templateId: merchant.defaultTemplate.id,
-              templateVersion: merchant.defaultTemplate.version,
+              skeleton: merchant.defaultReceiptTemplate.skeleton,
+              blocks: merchant.defaultReceiptTemplate.layoutSchema as Prisma.InputJsonValue,
+              templateId: merchant.defaultReceiptTemplate.id,
+              templateVersion: merchant.defaultReceiptTemplate.version,
             },
           },
         },
