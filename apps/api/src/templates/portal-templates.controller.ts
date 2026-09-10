@@ -25,6 +25,12 @@ export interface PortalTemplateListItemDto {
   skeleton: string;
   version: number;
   isDefault: boolean;
+  // F-8 (D-68): "the portal template DTO carries a boolean derived from
+  // merchantId IS NULL; the UI splits the list on it. No column is added."
+  // This is that projection — the shared-library starters (merchantId: null)
+  // vs the merchant's own templates. Not new logic: list() already returns
+  // merchantId on every row.
+  isStarter: boolean;
 }
 
 export interface PortalTemplateListResult {
@@ -69,6 +75,7 @@ export class PortalTemplatesController {
         skeleton: t.skeleton,
         version: t.version,
         isDefault: t.id === defaultTemplateId,
+        isStarter: t.merchantId === null,
       })),
       defaultTemplateId,
     };
@@ -90,6 +97,8 @@ export class PortalTemplatesController {
       // An archived template is never a current default — archive() refuses the
       // current default and setDefault() refuses an archived row.
       isDefault: false,
+      // listArchived() is merchant-owned rows only (starters cannot be archived).
+      isStarter: false,
     }));
   }
 

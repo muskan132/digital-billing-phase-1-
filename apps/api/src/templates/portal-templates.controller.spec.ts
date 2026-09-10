@@ -33,8 +33,8 @@ describe('PortalTemplatesController.list (W-2)', () => {
 
     expect(result.defaultTemplateId).toBe('tpl-1');
     expect(result.templates).toEqual([
-      { id: 'tpl-1', name: 'Retail', billType: 'TAX_INVOICE', skeleton: 'RETAIL', version: 2, isDefault: true },
-      { id: 'tpl-2', name: 'Receipt', billType: 'RECEIPT', skeleton: 'MINIMALIST', version: 1, isDefault: false },
+      { id: 'tpl-1', name: 'Retail', billType: 'TAX_INVOICE', skeleton: 'RETAIL', version: 2, isDefault: true, isStarter: false },
+      { id: 'tpl-2', name: 'Receipt', billType: 'RECEIPT', skeleton: 'MINIMALIST', version: 1, isDefault: false, isStarter: true },
     ]);
     // layoutSchema never leaves the controller — a dashboard list has no use for it.
     expect(result.templates.every((t) => !('layoutSchema' in t))).toBe(true);
@@ -148,7 +148,7 @@ describe('PortalTemplatesController — builder routes delegate to TemplatesServ
     const result = await controller.listArchived(CTX);
     expect(service.listArchived).toHaveBeenCalledWith('merchant-A');
     expect(result).toEqual([
-      { id: 'arc-1', name: 'Old Retail', billType: 'RECEIPT', skeleton: 'RETAIL', version: 3, isDefault: false },
+      { id: 'arc-1', name: 'Old Retail', billType: 'RECEIPT', skeleton: 'RETAIL', version: 3, isDefault: false, isStarter: false },
     ]);
     expect(result.every((t) => !('layoutSchema' in t))).toBe(true);
   });

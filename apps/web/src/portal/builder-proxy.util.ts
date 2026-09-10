@@ -49,7 +49,7 @@ async function proxyPortal(method: 'POST' | 'DELETE', apiPath: string, body?: un
 
 export async function proxyPortalTemplateWrite(
   templateId: string,
-  action: 'save' | 'save-as' | 'set-default' | 'archive',
+  action: 'save' | 'save-as' | 'set-default' | 'archive' | 'restore',
   body?: unknown,
 ): Promise<NextResponse> {
   return proxyPortal('POST', `/portal/templates/${encodeURIComponent(templateId)}/${action}`, body);

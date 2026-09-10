@@ -22,14 +22,21 @@ export interface PortalTemplateRow {
   id: string;
   name: string;
   layoutSchema: LayoutSchemaV2;
+  // F-8: derived from the raw row's merchantId (null = shared-library starter,
+  // D-68). Drives which builder actions render — a starter offers Save As only.
+  isStarter: boolean;
 }
 
 // Crosses an HTTP boundary — same reasoning as every other portal page's
-// runtime shape check (H-2/H-3/W-2).
-function isPortalTemplateRow(value: unknown): value is PortalTemplateRow {
-  if (typeof value !== 'object' || value === null) return false;
+// runtime shape check (H-2/H-3/W-2). GET /portal/templates/:id returns the raw
+// Template row (findOne), so merchantId is present.
+function parsePortalTemplateRow(value: unknown): PortalTemplateRow | null {
+  if (typeof value !== 'object' || value === null) return null;
   const v = value as Record<string, unknown>;
-  return typeof v.id === 'string' && typeof v.name === 'string' && typeof v.layoutSchema === 'object' && v.layoutSchema !== null;
+  if (typeof v.id !== 'string' || typeof v.name !== 'string') return null;
+  if (typeof v.layoutSchema !== 'object' || v.layoutSchema === null) return null;
+  if (!(v.merchantId === null || typeof v.merchantId === 'string')) return null;
+  return { id: v.id, name: v.name, layoutSchema: v.layoutSchema as LayoutSchemaV2, isStarter: v.merchantId === null };
 }
 
 function ErrorState() {
@@ -71,9 +78,10 @@ export default async function PortalTemplateBuilderPage({ params }: { params: Pr
     return <ErrorState />;
   }
 
-  if (!isPortalTemplateRow(payload)) {
+  const template = parsePortalTemplateRow(payload);
+  if (template === null) {
     return <ErrorState />;
   }
 
-  return <BuilderClient template={payload} />;
+  return <BuilderClient template={template} />;
 }

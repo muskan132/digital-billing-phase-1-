@@ -19,6 +19,7 @@
     "verify:x3": "ts-node scripts/verify-x3-final-regression.ts",
     "verify:f6": "ts-node scripts/verify-f6-default-selection.ts",
     "verify:f7": "ts-node scripts/verify-f7-direct-api-resolution.ts",
+    "verify:f8": "ts-node scripts/verify-f8-templates-list-ui.ts",
     "test": "jest"
   },
   "dependencies": {

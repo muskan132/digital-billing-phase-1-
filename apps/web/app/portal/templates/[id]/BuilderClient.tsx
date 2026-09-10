@@ -1,68 +1,120 @@
 'use client';
 
-// W-3: thin portal-specific host for the UNCHANGED Phase-3 builder
-// components — same imports, same props, as the demo builder page
-// (app/(main)/demo/templates/[id]/page.tsx). The only new thing here is
-// the Save action, wired to the local Route Handler proxy
-// (./save/route.ts) instead of a direct API call, since a save needs the
-// session cookie + CSRF token neither of which a plain browser fetch to
-// the API can reliably carry cross-origin.
+// W-3 + F-8: portal-specific host for the UNCHANGED Phase-3 builder components
+// (useBuilderState/EditBillPanel/FinalLookTab — imported as-is, zero edits to
+// src/builder/*). Write actions go through the local Route Handler proxies
+// (./save|save-as/route.ts) which carry the session cookie + CSRF token.
+//
+// F-8: Save and Save As are two distinct buttons. A STARTER (merchantId: null,
+// isStarter=true) offers ONLY Save As — the backend refuses save() on a starter
+// with 422 CANNOT_FORK_LIBRARY_PRESET, so the button is hidden rather than
+// shown-and-failing. A refusal from either renders the server's NAMED error
+// verbatim (extractServerError), never a generic "save failed".
 import { useState } from 'react';
 import { useBuilderState } from '../../../../src/builder/useBuilderState';
 import { EditBillPanel } from '../../../../src/builder/EditBillPanel';
 import { FinalLookTab } from '../../../../src/builder/FinalLookTab';
+import { extractServerError } from '../../../../src/portal/templates-list.util';
 import { PortalTemplateRow } from './page';
 
-type SaveState = { status: 'idle' } | { status: 'saving' } | { status: 'error'; message: string };
+type ActionState = { status: 'idle' } | { status: 'busy' } | { status: 'error'; message: string };
 
 export function BuilderClient({ template }: { template: PortalTemplateRow }) {
   const builder = useBuilderState(template.layoutSchema);
-  const [saveState, setSaveState] = useState<SaveState>({ status: 'idle' });
+  const [state, setState] = useState<ActionState>({ status: 'idle' });
+  const [saveAsName, setSaveAsName] = useState('');
+
+  function currentLayoutSchema() {
+    return { blocks: builder.doc.blocks, ...(builder.doc.theme ? { theme: builder.doc.theme } : {}) };
+  }
+
+  async function post(path: string, body: unknown): Promise<{ ok: boolean; status: number; json: unknown }> {
+    const res = await fetch(path, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const json = await res.json().catch(() => null);
+    return { ok: res.ok, status: res.status, json };
+  }
 
   async function handleSave() {
-    setSaveState({ status: 'saving' });
+    setState({ status: 'busy' });
     try {
-      const response = await fetch(`/portal/templates/${encodeURIComponent(template.id)}/save`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          layoutSchema: {
-            blocks: builder.doc.blocks,
-            ...(builder.doc.theme ? { theme: builder.doc.theme } : {}),
-          },
-        }),
+      const { ok, status, json } = await post(`/portal/templates/${encodeURIComponent(template.id)}/save`, {
+        layoutSchema: currentLayoutSchema(),
       });
-      const data = await response.json().catch(() => null);
-      if (!response.ok) {
-        setSaveState({ status: 'error', message: (data?.message as string) ?? (data?.error_code as string) ?? 'Save failed.' });
+      if (!ok) {
+        setState({ status: 'error', message: extractServerError(json, status).message });
         return;
       }
-      // D-32: save() always forks — the saved document now lives under a
-      // NEW template id, never the one this page was loaded with.
-      window.location.href = `/portal/templates/${encodeURIComponent(data.id as string)}`;
+      // D-32: save() always forks — the saved document lives under a NEW id.
+      window.location.href = `/portal/templates/${encodeURIComponent((json as { id: string }).id)}`;
     } catch {
-      setSaveState({ status: 'error', message: 'Could not reach the server.' });
+      setState({ status: 'error', message: 'Could not reach the server.' });
     }
   }
+
+  async function handleSaveAs() {
+    if (saveAsName.trim().length === 0) {
+      setState({ status: 'error', message: 'Enter a name for the new template.' });
+      return;
+    }
+    setState({ status: 'busy' });
+    try {
+      const { ok, status, json } = await post(`/portal/templates/${encodeURIComponent(template.id)}/save-as`, {
+        name: saveAsName.trim(),
+        layoutSchema: currentLayoutSchema(),
+      });
+      if (!ok) {
+        setState({ status: 'error', message: extractServerError(json, status).message });
+        return;
+      }
+      // D-62: Save As creates a NEW lineage — navigate to it.
+      window.location.href = `/portal/templates/${encodeURIComponent((json as { id: string }).id)}`;
+    } catch {
+      setState({ status: 'error', message: 'Could not reach the server.' });
+    }
+  }
+
+  const busy = state.status === 'busy';
 
   return (
     <div className="builder-shell">
       <header className="builder-header">
-        <h1>{template.name}</h1>
-        <div className="builder-undo-redo">
-          <button type="button" onClick={builder.undo} disabled={!builder.canUndo}>
+        <div>
+          <h1>{template.name}</h1>
+          {template.isStarter && <span className="builder-starter-tag">Starter — Save As to make it yours</span>}
+        </div>
+        <div className="builder-toolbar">
+          <button type="button" onClick={builder.undo} disabled={!builder.canUndo || busy}>
             Undo
           </button>
-          <button type="button" onClick={builder.redo} disabled={!builder.canRedo}>
+          <button type="button" onClick={builder.redo} disabled={!builder.canRedo || busy}>
             Redo
           </button>
-          <button type="button" onClick={handleSave} disabled={saveState.status === 'saving'}>
-            {saveState.status === 'saving' ? 'Saving…' : 'Save'}
-          </button>
+          {!template.isStarter && (
+            <button type="button" onClick={handleSave} disabled={busy}>
+              {busy ? 'Working…' : 'Save'}
+            </button>
+          )}
+          <span className="builder-save-as">
+            <input
+              type="text"
+              placeholder="New template name"
+              value={saveAsName}
+              onChange={(e) => setSaveAsName(e.target.value)}
+              maxLength={120}
+              disabled={busy}
+            />
+            <button type="button" onClick={handleSaveAs} disabled={busy}>
+              Save As
+            </button>
+          </span>
         </div>
       </header>
 
-      {saveState.status === 'error' && <p className="portal-builder-save-error">{saveState.message}</p>}
+      {state.status === 'error' && <p className="portal-builder-save-error">{state.message}</p>}
 
       <main className="edit-bill-layout">
         <EditBillPanel doc={builder.doc} onEdit={builder.edit} onEditDebounced={builder.editDebounced} />

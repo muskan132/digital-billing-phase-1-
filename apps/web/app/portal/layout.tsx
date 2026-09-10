@@ -49,6 +49,11 @@ export default async function PortalLayout({ children }: { children: React.React
         <div className="portal-shell">
           <header className="portal-nav">
             <span className="portal-nav-brand">Digital Billing</span>
+            <nav className="portal-nav-links">
+              <a href="/portal">Dashboard</a>
+              <a href="/portal/templates">Templates</a>
+              <a href="/portal/bills">Bills</a>
+            </nav>
             <div className="portal-nav-account">
               <span className="portal-nav-merchant">{me.merchantName}</span>
               <LogoutButton />
