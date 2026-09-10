@@ -11,7 +11,7 @@
 // MERCHANT_ADMIN+STORE_STAFF read default at the METHOD level — this is
 // the first controller in the app where that distinction actually matters,
 // which is exactly what surfaced the D-59 bug.
-import { Body, Controller, Get, HttpCode, Param, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, Param, Post, UseGuards } from '@nestjs/common';
 import { UserRole } from '@prisma/client';
 import { SessionGuard } from '../auth/session.guard';
 import { Roles } from '../auth/roles.decorator';
@@ -106,5 +106,15 @@ export class PortalTemplatesController {
   @Roles(UserRole.MERCHANT_ADMIN)
   async archive(@Param('id') id: string, @CurrentMerchantContext() ctx: MerchantContext) {
     return this.templatesService.archive(id, ctx.merchantId);
+  }
+
+  // F-4 (D-64): hard-delete the entire lineage. 200 { deletedCount }.
+  // MERCHANT_ADMIN only; refused (422) if any version issued a bill or is a
+  // current default; a second merchant's / a starter's id → 404.
+  @Delete(':id')
+  @HttpCode(200)
+  @Roles(UserRole.MERCHANT_ADMIN)
+  async deleteLineage(@Param('id') id: string, @CurrentMerchantContext() ctx: MerchantContext) {
+    return this.templatesService.deleteLineage(id, ctx.merchantId);
   }
 }

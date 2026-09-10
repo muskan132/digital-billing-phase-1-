@@ -69,6 +69,7 @@ describe('PortalTemplatesController — builder routes delegate to TemplatesServ
       saveAs: jest.fn().mockResolvedValue({ id: 'tpl-saved-as' }),
       setDefault: jest.fn().mockResolvedValue({ id: 'merchant-A' }),
       archive: jest.fn().mockResolvedValue({ id: 'tpl-1' }),
+      deleteLineage: jest.fn().mockResolvedValue({ deletedCount: 1 }),
       ...overrides,
     };
     return { controller: new PortalTemplatesController(service as unknown as TemplatesService), service };
@@ -112,6 +113,12 @@ describe('PortalTemplatesController — builder routes delegate to TemplatesServ
     await controller.archive('tpl-1', CTX);
     expect(service.archive).toHaveBeenCalledWith('tpl-1', 'merchant-A');
   });
+
+  it('deleteLineage(id, merchantId)', async () => {
+    const { controller, service } = makeController();
+    await controller.deleteLineage('tpl-1', CTX);
+    expect(service.deleteLineage).toHaveBeenCalledWith('tpl-1', 'merchant-A');
+  });
 });
 
 // D-59/D-50: the concrete proof this task exists for — the REAL controller,
@@ -132,6 +139,7 @@ const FAKE_TEMPLATES_SERVICE = {
   create: async () => ({ id: 'tpl-created' }),
   save: async () => ({ id: 'tpl-1-v2' }),
   saveAs: async () => ({ id: 'tpl-saved-as' }),
+  deleteLineage: async () => ({ deletedCount: 1 }),
   setDefault: async () => ({ id: 'merchant-A' }),
   archive: async () => ({ id: 'tpl-1' }),
 };
@@ -171,7 +179,7 @@ describe('PortalTemplatesController (structural — real Nest app, real SessionG
     }
   });
 
-  it('writes (create/save/save-as/set-default/archive) accept MERCHANT_ADMIN...', async () => {
+  it('writes (create/save/save-as/set-default/archive/delete) accept MERCHANT_ADMIN...', async () => {
     const cookie = 'session=MERCHANT_ADMIN';
     const create = await fetch(`${baseUrl}/portal/templates`, {
       method: 'POST',
@@ -190,12 +198,14 @@ describe('PortalTemplatesController (structural — real Nest app, real SessionG
     });
     const setDefault = await fetch(`${baseUrl}/portal/templates/tpl-1/set-default`, { method: 'POST', headers: { cookie } });
     const archive = await fetch(`${baseUrl}/portal/templates/tpl-1/archive`, { method: 'POST', headers: { cookie } });
+    const del = await fetch(`${baseUrl}/portal/templates/tpl-1`, { method: 'DELETE', headers: { cookie } });
 
     expect(create.status).toBe(201);
     expect(save.status).toBe(201);
     expect(saveAs.status).toBe(201);
     expect(setDefault.status).toBe(201);
     expect(archive.status).toBe(201);
+    expect(del.status).toBe(200);
   });
 
   it('...and REJECT STORE_STAFF with 403 on every one of them — the A-3 verify line, now actually true', async () => {
@@ -217,11 +227,13 @@ describe('PortalTemplatesController (structural — real Nest app, real SessionG
     });
     const setDefault = await fetch(`${baseUrl}/portal/templates/tpl-1/set-default`, { method: 'POST', headers: { cookie } });
     const archive = await fetch(`${baseUrl}/portal/templates/tpl-1/archive`, { method: 'POST', headers: { cookie } });
+    const del = await fetch(`${baseUrl}/portal/templates/tpl-1`, { method: 'DELETE', headers: { cookie } });
 
     expect(create.status).toBe(403);
     expect(save.status).toBe(403);
     expect(saveAs.status).toBe(403);
     expect(setDefault.status).toBe(403);
     expect(archive.status).toBe(403);
+    expect(del.status).toBe(403);
   });
 });

@@ -298,7 +298,22 @@ async function main() {
       if (res.status !== 404) findingFail(`POST .../archive — expected 404 for B's template as A, got ${res.status}`);
       const after = await prisma.template.findUniqueOrThrow({ where: { id: templateB.id } });
       if (after.archivedAt !== before.archivedAt) findingFail("POST .../archive on B's template as A -> 404, but B's template got archived anyway");
-      console.log('PASS  POST .../archive -> 404, B\'s template archivedAt unchanged\n');
+      console.log('PASS  POST .../archive -> 404, B\'s template archivedAt unchanged');
+    }
+
+    // -- DELETE /portal/templates/:id (F-4) — 404-on-delete, B's template still there.
+    {
+      const beforeCount = await prisma.template.count({ where: { merchantId: merchantB.merchantId } });
+      const token = await csrfToken(merchantA);
+      const res = await fetch(`${API_BASE}/portal/templates/${templateB.id}`, {
+        method: 'DELETE',
+        headers: { cookie: cookie(merchantA), 'x-csrf-token': token },
+      });
+      if (res.status !== 404) findingFail(`DELETE .../templates/:id — expected 404 for B's template as A, got ${res.status}`);
+      await prisma.template.findUniqueOrThrow({ where: { id: templateB.id } }); // still there
+      const afterCount = await prisma.template.count({ where: { merchantId: merchantB.merchantId } });
+      if (afterCount !== beforeCount) findingFail(`DELETE on B's template as A -> 404, but B's template count changed (${beforeCount} -> ${afterCount})`);
+      console.log('PASS  DELETE /portal/templates/:id -> 404, B\'s template untouched\n');
     }
 
     // ==================== Part 3: portal-forked immutability (real HTTP, scratch tenant) ====================

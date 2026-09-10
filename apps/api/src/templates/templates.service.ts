@@ -54,6 +54,12 @@ const CREATABLE_SKELETONS: ReadonlySet<TemplateSkeleton> = new Set([
   TemplateSkeleton.RESTAURANT,
 ]);
 
+// F-4 (D-74): a template lineage has no root/lineage-key column, so
+// deleteLineage() computes membership by walking parentTemplateId at runtime.
+// This caps the walk — a real merchant lineage is single-digit-sized; anything
+// near this means a cycle or corruption, which must surface, not loop.
+const MAX_LINEAGE = 1000;
+
 // F-3 (D-66): the from-scratch starting document — a visible HEADER and a
 // visible ITEMS, nothing else. Skeleton-independent (each skin renders it its
 // own way; the merchant builds it out in the builder). Ids via the U-3 palette
@@ -548,5 +554,99 @@ export class TemplatesService {
       where: { id },
       data: { archivedAt: new Date() },
     });
+  }
+
+  // F-4 (D-64 / D-74): hard-delete an ENTIRE template lineage, permitted only
+  // when no Bill references any version in it and no version is a current
+  // default. One transaction. Deleting an archived template is allowed (D-64).
+  // A starter (merchantId: null) is a 404 — the scope query is a plain equality
+  // on the session merchant, same as archive(). Refusal, never silent archive.
+  // A deleted lineage's name is freed immediately (D-64, vs D-65's archive):
+  // the rows leave the partial unique index's scope entirely.
+  async deleteLineage(id: string, merchantId: string) {
+    return this.prisma.$transaction(async (tx) => {
+      const target = await tx.template.findFirst({
+        where: { id, merchantId },
+        select: { id: true, parentTemplateId: true },
+      });
+      if (!target) {
+        throw new NotFoundException();
+      }
+
+      const lineageIds = await this.collectLineageIds(tx, target);
+
+      // D-64: the bill check walks EVERY version — a bill on an older, non-head
+      // version must block the delete (the named F-4 bug). Bills before default
+      // (F-4 Q5): a lineage with issued bills can never be deleted, so don't
+      // send the merchant to repoint a default first.
+      const issued = await tx.bill.count({ where: { templateId: { in: lineageIds } } });
+      if (issued > 0) {
+        throw new UnprocessableEntityException({
+          error_code: 'TEMPLATE_HAS_ISSUED_BILLS',
+          message: 'This template has issued bills and cannot be deleted — archive it instead.',
+        });
+      }
+
+      // D-64 / S-10: neither current default pointer may point at ANY version of
+      // the lineage (in practice only a head can, but check the whole list).
+      const merchant = await tx.merchant.findUniqueOrThrow({
+        where: { id: merchantId },
+        select: { defaultReceiptTemplateId: true, defaultTaxInvoiceTemplateId: true },
+      });
+      const isDefault =
+        (merchant.defaultReceiptTemplateId !== null && lineageIds.includes(merchant.defaultReceiptTemplateId)) ||
+        (merchant.defaultTaxInvoiceTemplateId !== null && lineageIds.includes(merchant.defaultTaxInvoiceTemplateId));
+      if (isDefault) {
+        throw new UnprocessableEntityException({
+          error_code: 'CANNOT_DELETE_DEFAULT_TEMPLATE',
+          message: 'This is a current default template — choose a different default before deleting it.',
+        });
+      }
+
+      // Template_parentTemplateId_fkey is ON DELETE SET NULL, so a single
+      // deleteMany over the whole lineage cannot raise a self-FK error and the
+      // order is irrelevant. Nothing but Bill references a Template row, and the
+      // check above guarantees no Bill does.
+      const { count } = await tx.template.deleteMany({ where: { id: { in: lineageIds } } });
+      return { deletedCount: count };
+    });
+  }
+
+  // F-4 (D-74): collect every row id in the lineage `start` belongs to. Walk
+  // parentTemplateId UP to the root, then breadth-first back DOWN. Correct
+  // wherever `start` sits (head, middle, or root); the BFS keeps it correct even
+  // if a lineage ever branched (it can't today — fork only from head). Bounded.
+  private async collectLineageIds(
+    tx: Prisma.TransactionClient,
+    start: { id: string; parentTemplateId: string | null },
+  ): Promise<string[]> {
+    let root = start;
+    let hops = 0;
+    while (root.parentTemplateId !== null) {
+      if (++hops > MAX_LINEAGE) {
+        throw new Error(`Template lineage walk exceeded ${MAX_LINEAGE} rows walking up from ${start.id}`);
+      }
+      root = await tx.template.findUniqueOrThrow({
+        where: { id: root.parentTemplateId },
+        select: { id: true, parentTemplateId: true },
+      });
+    }
+
+    const ids = new Set<string>([root.id]);
+    let frontier = [root.id];
+    while (frontier.length > 0) {
+      const children = await tx.template.findMany({
+        where: { parentTemplateId: { in: frontier } },
+        select: { id: true },
+      });
+      frontier = children.map((c) => c.id).filter((cid) => !ids.has(cid));
+      if (ids.size + frontier.length > MAX_LINEAGE) {
+        throw new Error(`Template lineage walk exceeded ${MAX_LINEAGE} rows walking down from ${root.id}`);
+      }
+      for (const cid of frontier) {
+        ids.add(cid);
+      }
+    }
+    return [...ids];
   }
 }

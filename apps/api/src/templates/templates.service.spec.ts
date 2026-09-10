@@ -62,6 +62,10 @@ describe('TemplatesService', () => {
   let txTemplateFindFirst: jest.Mock;
   let txTemplateCreate: jest.Mock;
   let txMerchantUpdateMany: jest.Mock;
+  let txTemplateFindMany: jest.Mock;
+  let txTemplateDeleteMany: jest.Mock;
+  let txBillCount: jest.Mock;
+  let txMerchantFindUniqueOrThrow: jest.Mock;
   let transactionFn: jest.Mock;
   let service: TemplatesService;
 
@@ -79,10 +83,24 @@ describe('TemplatesService', () => {
     txTemplateCreate = jest.fn().mockImplementation(({ data }) => Promise.resolve({ id: 'tpl-forked', ...data }));
     txMerchantUpdateMany = jest.fn().mockResolvedValue({ count: 0 });
 
+    // F-4: deleteLineage's tx surface.
+    txTemplateFindMany = jest.fn().mockResolvedValue([]); // no children by default
+    txTemplateDeleteMany = jest.fn().mockResolvedValue({ count: 1 });
+    txBillCount = jest.fn().mockResolvedValue(0);
+    txMerchantFindUniqueOrThrow = jest.fn().mockResolvedValue({ defaultReceiptTemplateId: null, defaultTaxInvoiceTemplateId: null });
+
     transactionFn = jest.fn().mockImplementation((cb) =>
       cb({
-        template: { updateMany: txTemplateUpdateMany, findFirst: txTemplateFindFirst, create: txTemplateCreate },
-        merchant: { updateMany: txMerchantUpdateMany },
+        template: {
+          updateMany: txTemplateUpdateMany,
+          findFirst: txTemplateFindFirst,
+          create: txTemplateCreate,
+          findMany: txTemplateFindMany,
+          findUniqueOrThrow: jest.fn((args) => Promise.resolve({ id: (args as { where: { id: string } }).where.id, parentTemplateId: null })),
+          deleteMany: txTemplateDeleteMany,
+        },
+        bill: { count: txBillCount },
+        merchant: { updateMany: txMerchantUpdateMany, findUniqueOrThrow: txMerchantFindUniqueOrThrow },
       }),
     );
 
@@ -547,6 +565,59 @@ describe('TemplatesService', () => {
       templateFindFirst.mockResolvedValue({ ...MERCHANT_OWNED_TEMPLATE, isHead: false });
       await expect(service.archive(MERCHANT_OWNED_TEMPLATE.id, MERCHANT_ID)).rejects.toThrow(UnprocessableEntityException);
       expect(templateUpdate).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('deleteLineage (F-4 / D-64 / D-74)', () => {
+    beforeEach(() => {
+      // Target found, scoped to the session merchant, is a root (no walk-up).
+      txTemplateFindFirst.mockResolvedValue({ id: 'v1', parentTemplateId: null });
+    });
+
+    it('404 when the target is out of scope (wrong merchant / nonexistent / starter) — no walk, no delete', async () => {
+      txTemplateFindFirst.mockResolvedValue(null);
+      await expect(service.deleteLineage('nope', MERCHANT_ID)).rejects.toThrow(NotFoundException);
+      expect(txBillCount).not.toHaveBeenCalled();
+      expect(txTemplateDeleteMany).not.toHaveBeenCalled();
+    });
+
+    it('the bill check is over EVERY collected lineage id (templateId IN [...]), not just the target', async () => {
+      // walk-down finds one child, then no more.
+      txTemplateFindMany.mockResolvedValueOnce([{ id: 'v2' }]).mockResolvedValue([]);
+      await service.deleteLineage('v1', MERCHANT_ID);
+      expect(txBillCount).toHaveBeenCalledWith({ where: { templateId: { in: expect.arrayContaining(['v1', 'v2']) } } });
+      expect((txBillCount.mock.calls[0][0].where.templateId.in as string[]).sort()).toEqual(['v1', 'v2']);
+    });
+
+    it('refuses with TEMPLATE_HAS_ISSUED_BILLS when any version has a bill — no delete', async () => {
+      txBillCount.mockResolvedValue(1);
+      const err = await service.deleteLineage('v1', MERCHANT_ID).catch((e) => e);
+      expect(err).toBeInstanceOf(UnprocessableEntityException);
+      expect((err as UnprocessableEntityException).getResponse()).toMatchObject({ error_code: 'TEMPLATE_HAS_ISSUED_BILLS' });
+      expect(txTemplateDeleteMany).not.toHaveBeenCalled();
+    });
+
+    it('refuses with CANNOT_DELETE_DEFAULT_TEMPLATE when a lineage id is either default pointer — no delete', async () => {
+      txMerchantFindUniqueOrThrow.mockResolvedValue({ defaultReceiptTemplateId: 'v1', defaultTaxInvoiceTemplateId: null });
+      const err = await service.deleteLineage('v1', MERCHANT_ID).catch((e) => e);
+      expect(err).toBeInstanceOf(UnprocessableEntityException);
+      expect((err as UnprocessableEntityException).getResponse()).toMatchObject({ error_code: 'CANNOT_DELETE_DEFAULT_TEMPLATE' });
+      expect(txTemplateDeleteMany).not.toHaveBeenCalled();
+    });
+
+    it('bills are checked BEFORE default (F-4 Q5) — a lineage that is both reports TEMPLATE_HAS_ISSUED_BILLS', async () => {
+      txBillCount.mockResolvedValue(1);
+      txMerchantFindUniqueOrThrow.mockResolvedValue({ defaultReceiptTemplateId: 'v1', defaultTaxInvoiceTemplateId: null });
+      const err = await service.deleteLineage('v1', MERCHANT_ID).catch((e) => e);
+      expect((err as UnprocessableEntityException).getResponse()).toMatchObject({ error_code: 'TEMPLATE_HAS_ISSUED_BILLS' });
+    });
+
+    it('on success returns { deletedCount } from the single deleteMany over the whole lineage', async () => {
+      txTemplateFindMany.mockResolvedValueOnce([{ id: 'v2' }, { id: 'v3' }]).mockResolvedValue([]);
+      txTemplateDeleteMany.mockResolvedValue({ count: 3 });
+      const result = await service.deleteLineage('v1', MERCHANT_ID);
+      expect(result).toEqual({ deletedCount: 3 });
+      expect(txTemplateDeleteMany).toHaveBeenCalledWith({ where: { id: { in: expect.arrayContaining(['v1', 'v2', 'v3']) } } });
     });
   });
 

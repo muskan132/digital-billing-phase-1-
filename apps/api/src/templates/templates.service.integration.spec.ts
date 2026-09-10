@@ -678,3 +678,178 @@ describe('F-3: create-from-scratch (real DB)', () => {
     expect(archived.archivedAt).toBeInstanceOf(Date);
   });
 });
+
+// F-4 (D-64 / D-74): hard-delete the entire lineage. Real Postgres only — the
+// lineage walk, the FK RESTRICT backstop, and transaction rollback cannot be
+// proven with a mocked client.
+describe('F-4: hard delete (real DB)', () => {
+  let merchant: ScratchMerchant;
+  const F4_BODY = { layoutSchema: { blocks: MINIMAL_VALID_BLOCKS } };
+
+  beforeAll(async () => {
+    merchant = await createScratchMerchant();
+  });
+
+  afterAll(async () => {
+    await prisma.bill.deleteMany({ where: { merchantId: merchant.merchantId } });
+    await prisma.order.deleteMany({ where: { merchantId: merchant.merchantId } });
+    await cleanupMerchant(merchant);
+  });
+
+  // Order + Bill so a real Bill row references `templateId`. Minimal columns.
+  async function issueBillAgainst(templateId: string, billType: 'RECEIPT' | 'TAX_INVOICE' = 'RECEIPT') {
+    const orderId = uniqueId('order');
+    await prisma.order.create({
+      data: {
+        id: orderId,
+        merchantId: merchant.merchantId,
+        status: 'SUCCESS',
+        externalTransactionId: uniqueId('ext'), // Order has a txnId XOR externalTransactionId check
+        rawCallback: {},
+      },
+    });
+    return prisma.bill.create({
+      data: {
+        id: uniqueId('bill'),
+        orderId,
+        merchantId: merchant.merchantId,
+        billType,
+        templateId,
+        totalPaise: BigInt(100),
+        snapshot: {},
+      },
+    });
+  }
+
+  it('THE non-head-bill test — a bill on an OLDER (non-head) version blocks the delete: 422 TEMPLATE_HAS_ISSUED_BILLS, ZERO rows removed', async () => {
+    const v1 = await createOwnTemplateWithName(merchant, 'F-4 nonhead bill', true, uniqueId('tpl'));
+    const bill = await issueBillAgainst(v1.id); // Bill.templateId = v1.id
+    const v2 = await service.save(v1.id, F4_BODY, merchant.merchantId); // v1 now NON-HEAD
+    const v3 = await service.save(v2.id, F4_BODY, merchant.merchantId); // head = v3
+
+    const err = await service.deleteLineage(v3.id, merchant.merchantId).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(UnprocessableEntityException);
+    expect((err as UnprocessableEntityException).getResponse()).toMatchObject({ error_code: 'TEMPLATE_HAS_ISSUED_BILLS' });
+
+    // zero rows removed — every version and the bill still there
+    expect(await prisma.template.count({ where: { id: { in: [v1.id, v2.id, v3.id] } } })).toBe(3);
+    expect(await prisma.bill.count({ where: { id: bill.id } })).toBe(1);
+
+    await prisma.bill.deleteMany({ where: { merchantId: merchant.merchantId } });
+    await prisma.order.deleteMany({ where: { merchantId: merchant.merchantId } });
+  });
+
+  it('deletes a bill-free, non-default lineage entirely — every version gone (by count), Bill/Order/Link/Broadcast counts unchanged', async () => {
+    const v1 = await createOwnTemplateWithName(merchant, 'F-4 clean delete', true, uniqueId('tpl'));
+    const v2 = await service.save(v1.id, F4_BODY, merchant.merchantId);
+    const v3 = await service.save(v2.id, F4_BODY, merchant.merchantId);
+
+    const before = {
+      bill: await prisma.bill.count(),
+      order: await prisma.order.count(),
+      link: await prisma.link.count(),
+      broadcast: await prisma.broadcast.count(),
+    };
+
+    const result = await service.deleteLineage(v2.id, merchant.merchantId); // via a NON-head id
+    expect(result).toEqual({ deletedCount: 3 });
+    expect(await prisma.template.count({ where: { id: { in: [v1.id, v2.id, v3.id] } } })).toBe(0);
+
+    expect(await prisma.bill.count()).toBe(before.bill);
+    expect(await prisma.order.count()).toBe(before.order);
+    expect(await prisma.link.count()).toBe(before.link);
+    expect(await prisma.broadcast.count()).toBe(before.broadcast);
+  });
+
+  it('refused when the HEAD has a bill — 422, zero rows', async () => {
+    const t = await createOwnTemplateWithName(merchant, 'F-4 head bill', true, uniqueId('tpl'));
+    await issueBillAgainst(t.id);
+    const err = await service.deleteLineage(t.id, merchant.merchantId).catch((e: unknown) => e);
+    expect((err as UnprocessableEntityException).getResponse()).toMatchObject({ error_code: 'TEMPLATE_HAS_ISSUED_BILLS' });
+    expect(await prisma.template.count({ where: { id: t.id } })).toBe(1);
+    await prisma.bill.deleteMany({ where: { merchantId: merchant.merchantId } });
+    await prisma.order.deleteMany({ where: { merchantId: merchant.merchantId } });
+  });
+
+  it('refused when the lineage is the current RECEIPT default — 422 CANNOT_DELETE_DEFAULT_TEMPLATE', async () => {
+    const t = await createOwnTemplateWithName(merchant, 'F-4 receipt default', true, uniqueId('tpl'));
+    await service.setDefault(t.id, merchant.merchantId);
+    const err = await service.deleteLineage(t.id, merchant.merchantId).catch((e: unknown) => e);
+    expect((err as UnprocessableEntityException).getResponse()).toMatchObject({ error_code: 'CANNOT_DELETE_DEFAULT_TEMPLATE' });
+    expect(await prisma.template.count({ where: { id: t.id } })).toBe(1);
+    await prisma.merchant.update({ where: { id: merchant.merchantId }, data: { defaultReceiptTemplateId: null } });
+  });
+
+  it('refused when the lineage is the current TAX_INVOICE default — 422', async () => {
+    const t = await prisma.template.create({
+      data: {
+        id: uniqueId('tpl'),
+        merchantId: merchant.merchantId,
+        name: 'F-4 taxinv default',
+        billType: 'TAX_INVOICE',
+        layoutSchema: { schemaVersion: 2, skeleton: 'RETAIL', blocks: [] },
+        isHead: true,
+      },
+    });
+    await service.setDefault(t.id, merchant.merchantId);
+    const err = await service.deleteLineage(t.id, merchant.merchantId).catch((e: unknown) => e);
+    expect((err as UnprocessableEntityException).getResponse()).toMatchObject({ error_code: 'CANNOT_DELETE_DEFAULT_TEMPLATE' });
+    await prisma.merchant.update({ where: { id: merchant.merchantId }, data: { defaultTaxInvoiceTemplateId: null } });
+  });
+
+  it('refused when a NON-HEAD version is (forced) the default — the check walks the lineage, not just the head', async () => {
+    const v1 = await createOwnTemplateWithName(merchant, 'F-4 nonhead default', true, uniqueId('tpl'));
+    const v2 = await service.save(v1.id, F4_BODY, merchant.merchantId);
+    await prisma.merchant.update({ where: { id: merchant.merchantId }, data: { defaultReceiptTemplateId: v1.id } });
+    const err = await service.deleteLineage(v2.id, merchant.merchantId).catch((e: unknown) => e);
+    expect((err as UnprocessableEntityException).getResponse()).toMatchObject({ error_code: 'CANNOT_DELETE_DEFAULT_TEMPLATE' });
+    expect(await prisma.template.count({ where: { id: { in: [v1.id, v2.id] } } })).toBe(2);
+    await prisma.merchant.update({ where: { id: merchant.merchantId }, data: { defaultReceiptTemplateId: null } });
+  });
+
+  it('deleting an ARCHIVED template is permitted (D-64)', async () => {
+    const t = await createOwnTemplateWithName(merchant, 'F-4 archived then deleted', true, uniqueId('tpl'));
+    await service.archive(t.id, merchant.merchantId);
+    const result = await service.deleteLineage(t.id, merchant.merchantId);
+    expect(result).toEqual({ deletedCount: 1 });
+    expect(await prisma.template.count({ where: { id: t.id } })).toBe(0);
+  });
+
+  it('a second merchant templateId and a starter both 404', async () => {
+    const other = await createScratchMerchant();
+    const theirs = await createOwnTemplateWithName(other, 'F-4 theirs', true, uniqueId('tpl'));
+    await expect(service.deleteLineage(theirs.id, merchant.merchantId)).rejects.toBeInstanceOf(NotFoundException);
+    await expect(service.deleteLineage('seed-template-receipt', merchant.merchantId)).rejects.toBeInstanceOf(NotFoundException);
+    await cleanupMerchant(other);
+  });
+
+  it('a deleted template frees its name immediately — reusable with NO suffix, via create and via saveAs', async () => {
+    const t = await service.create({ name: 'F-4 reusable name', billType: 'RECEIPT', skeleton: 'MINIMALIST' }, merchant.merchantId);
+    await service.deleteLineage(t.id, merchant.merchantId);
+    const recreated = await service.create({ name: 'F-4 reusable name', billType: 'RECEIPT', skeleton: 'MINIMALIST' }, merchant.merchantId);
+    expect(recreated.name).toBe('F-4 reusable name');
+    await service.deleteLineage(recreated.id, merchant.merchantId);
+    const viaSaveAs = await service.saveAs(
+      'seed-template-receipt',
+      { name: 'F-4 reusable name', layoutSchema: { blocks: MINIMAL_VALID_BLOCKS } },
+      merchant.merchantId,
+    );
+    expect(viaSaveAs.name).toBe('F-4 reusable name');
+  });
+
+  it('one transaction — a forced failure inside the delete leaves EVERY lineage row intact', async () => {
+    const v1 = await createOwnTemplateWithName(merchant, 'F-4 atomic', true, uniqueId('tpl'));
+    const v2 = await service.save(v1.id, F4_BODY, merchant.merchantId);
+    const v3 = await service.save(v2.id, F4_BODY, merchant.merchantId);
+
+    const spy = jest
+      .spyOn(service as unknown as { collectLineageIds: () => Promise<string[]> }, 'collectLineageIds')
+      .mockRejectedValue(new Error('forced failure mid-delete'));
+    try {
+      await expect(service.deleteLineage(v3.id, merchant.merchantId)).rejects.toThrow('forced failure mid-delete');
+    } finally {
+      spy.mockRestore();
+    }
+    expect(await prisma.template.count({ where: { id: { in: [v1.id, v2.id, v3.id] } } })).toBe(3);
+  });
+});
