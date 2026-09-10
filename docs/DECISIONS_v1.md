@@ -417,3 +417,178 @@ accept both roles and a method-level override wins over the class default; one i
 `portal-templates.controller.spec.ts` proving the concrete case this bug protects:
 STORE_STAFF → 403 on every builder write route, MERCHANT_ADMIN → 200/201 on all of them — the
 exact line A-3's roadmap row named and that had never actually been true until now.
+
+# Phase 5 — Template lifecycle, delivery visibility, export
+
+### D-60 · Two default templates per merchant, one per `billType` — D-39's recorded gap, paid off
+
+**Decision:** `Merchant.defaultTemplateId` is **renamed** to `defaultReceiptTemplateId`, and `defaultTaxInvoiceTemplateId` is added alongside it. The PG callback path reads the receipt pointer; `POST /v1/bills` reads the tax-invoice pointer. Both are nullable FKs to `Template` with distinct relation names.
+
+**Reason:** D-39's own consequence section already recorded this: "§8's rule 6 (exactly one default per merchant per `billType`) is **not enforceable as stated** with one `defaultTemplateId` column — per-billType defaults are a GAP, not built." That gap is now blocking. The single pointer today aims at "Minimalist Receipt", a `RECEIPT` template, on a system whose direct API only ever issues `TAX_INVOICE` bills — so the pointer was structurally unusable on that path, and `resolveTaxInvoiceTemplate` invented a positional substitute (oldest own tax-invoice template by `createdAt`, then oldest shared). A merchant could not choose the template their invoices used, because there was no field to hold the choice.
+
+**This is not a reversal of D-39.** D-39 rejected an `isDefault Boolean` because it duplicated a fact `Merchant.defaultTemplateId` already held — two representations of one fact, requiring an invariant the database cannot express. Two FK columns hold **two different facts**: which template is the default for receipts, and which for tax invoices. Each remains singly represented, and more-than-one-default-per-type stays structurally impossible.
+
+**Runner-up:** a `MerchantDefaultTemplate(merchantId, billType, templateId)` table with `@@unique([merchantId, billType])`. It is the more correct shape in the abstract — the database enforces one-default-per-type for any future bill type, which is D-39's own "make invalid states unrepresentable" argument taken further. **Rejected on blast radius, not on merit:** there are exactly two bill types, the enum has been stable across four phases, and migrating the pointer out of `Merchant` would touch the PG callback path's `include: { defaultTemplate: true }` — the write path carrying the most hard-won correctness in the system. If a third bill type ever appears, promoting two columns to that table is a contained migration.
+
+**Rename, not drop-and-add:** the existing value must survive the migration. A drop-and-add would silently null every merchant's default, and the PG callback path treats a missing default as a config error that commits an Order with no Bill (D-14a) — a data-loss failure that looks like a handled edge case.
+
+---
+
+### D-61 · Direct-API template resolution: scoped lookup, default fallback stated in the response, `422` on bill-type mismatch
+
+**Decision:** `POST /v1/bills` resolves `template_id` as follows. The lookup stays scoped to `{ id, OR: [{ merchantId }, { merchantId: null }] }` with `merchantId` guard-resolved. An **unknown or not-yours** id falls back to the merchant's `defaultTaxInvoiceTemplateId`, and the response states the fallback and its reason explicitly, alongside the existing `template_id_used`. A **real, visible template of the wrong `billType`** is `422 TEMPLATE_BILL_TYPE_MISMATCH` with no write of any kind. The positional fallback chain — oldest own tax-invoice template by `createdAt`, then oldest shared — is removed entirely.
+
+**Supersedes D-13** ("no per-order override in v1"), which was explicitly v1-scoped. The override is now a supported part of the contract.
+
+**Reason:** the two failure cases are genuinely different and were being treated identically. An unknown id is usually a stale or mistyped reference and the merchant still wants their bill — FSD 5.4 and D-27 already say fall back, and the only change is that the fallback stops being invisible. A wrong-bill-type id is a *correct* id used incorrectly: the merchant is holding a real template and believes it is being applied. Silently substituting a different one there means every bill renders from a template the merchant did not choose, with a `201` and a working URL to confirm the mistake. That is the same class of silent-success failure D-32's default-repoint exists to prevent.
+
+The positional chain goes because it answers a question nobody asked: "which of your tax-invoice templates was created first" has no product meaning, and it made the merchant's actual choice (D-60's pointer) unreachable.
+
+**Breaking change, taken deliberately and now:** a caller sending a wrong-bill-type `template_id` receives `201` today and `422` after this change — a request that succeeded starts failing, and a POS that doesn't handle `4xx` may end a sale with no bill. This is free today: the contract is local, behind a demo API key, with one seeded merchant and no external integrator. D-27 already flagged publishing this API as a one-way door (ADR-6); after a real POS is integrated the same change needs a version, a deprecation window and a migration conversation. Adding the fallback-reason **field** breaks nobody and is purely additive.
+
+**Unchanged:** the JioPay callback path has no override and never will — the webhook payload carries no template field, and `jiopay-callback.dto.ts` has zero occurrences of one. It reads `defaultReceiptTemplateId`, full stop.
+
+---
+
+### D-62 · Save renames in place; Save As is always a clean break
+
+**Decision:** two distinct write paths, with distinct meanings.
+
+- **Save** is D-32's fork, unchanged in all four effects, plus an optional `name` that renames within the lineage. The merchant sees **one** list entry, because `list()` filters on `isHead` — a fork inside a lineage replaces the entry rather than adding one.
+- **Save As** creates a **new lineage**: `parentTemplateId: null`, `version: 1`, `isHead: true`, `merchantId` = the session merchant. It performs **exactly one** of D-32's four effects — writing the new row. It does **not** flip the source's `isHead` and does **not** repoint either default. It persists the **edited** document from the request body, never the source's stored one. It works identically from a starter and from the merchant's own template, and records **no link** back to the source.
+
+**Reason:** "in place" is a statement about the merchant's list, not about the row. Fork-on-write already produces exactly the in-place experience for Save, so no part of D-32 needs relaxing to give the merchant a Save button that behaves the way they expect. Save As diverges precisely because the source must survive: flipping the source's `isHead` would remove it from the list, which is the opposite of what Save As means, and repointing a default to a copy the merchant did not designate is a silent change to what every future bill renders.
+
+**No provenance link, decided explicitly:** `parentTemplateId` already means one specific thing — "the version I forked from *within this lineage*" — and `isHead` plus that column are what make lineage walking tractable. Overloading it with "the template I copied from" would make a lineage walk ambiguous and would let a merchant-owned row trace its history back into a shared starter, which D-33's deep-copy rule exists to prevent. Recording provenance would need its own column, and nothing in this phase or Phase 6 reads it.
+
+**Consequence:** `clone()`'s `CANNOT_CLONE_MERCHANT_TEMPLATE` refusal is removed and `clone()` folds into the single Save As path. `save()`'s `CANNOT_FORK_LIBRARY_PRESET` refusal **stays** — it is what makes "editing a starter requires Save As" structural rather than a UI convention.
+
+---
+
+### D-63 · Template names are unique per merchant among live head rows, enforced by a partial index
+
+**Decision:** a partial unique index — `UNIQUE ("merchantId", "name") WHERE "isHead" = true` — plus a server-side allocator that appends `(1)`, `(2)`, `(n)` to a taken name. The allocator applies on Save As, on rename via Save, and on restore. A `P2002` from a concurrent allocation is caught and retried with the next suffix, bounded.
+
+**Reason, and the trap it avoids:** a plain `@@unique([merchantId, name])` **cannot work here and would break every save immediately**. Every save forks: it creates a new row carrying the parent's name while the parent still exists. Naive name-uniqueness and fork-on-write are structurally incompatible, and the incompatibility only shows up at the first save, not at migration time.
+
+The partial index expresses the rule the merchant actually means: no two *live, current* templates in my list share a name. Superseded versions keep their names harmlessly because they are no longer head.
+
+**Why the existing transaction already satisfies it, with no change:** `save()` flips the parent's `isHead` to `false` **before** creating the forked row, inside the same transaction. At the moment the new row is inserted, the parent has already left the index's scope. The ordering the index requires is the ordering that already exists.
+
+**Starters are outside the constraint.** Postgres ignores NULLs in unique indexes, so the six `merchantId: null` starter rows are unaffected and may share names with any merchant's templates.
+
+**Retry, not count-then-insert:** computing the next free suffix and inserting is not atomic, and this project already carries one recorded `P2002` race on the callback path. Handling the conflict rather than assuming it away avoids adding a second one.
+
+**Prisma cannot express a partial unique index declaratively** — S-11's migration is hand-written SQL with the reason in a comment.
+
+**Named precondition:** the local database holds 28 rows accumulated from repeated `verify:x2`/`verify:x3` runs. Duplicate head names among them will make index creation **fail**. Cleaning them, and fixing the verify scripts to remove the lineages they create, is part of S-11 rather than housekeeping.
+
+---
+
+### D-64 · Hard delete exists, as a structurally-enforced carve-out from D-33
+
+**Decision:** a template lineage may be **hard-deleted** — every version row in it — exactly when **no `Bill` references any version in that lineage**. Otherwise the request is refused with `422 TEMPLATE_HAS_ISSUED_BILLS`, naming archive as the alternative. Neither current default may be deleted. Deleting an archived template is permitted. This is the **second** written exception to D-33's project-wide no-hard-delete rule; D-51's session-reaper carve-out is the first.
+
+**Reason:** D-33 did not reject hard deletion as a preference. It rejected it as impossible — "`Bill.templateId` is a required FK, so a hard delete is not merely unwise, it is impossible without either orphaning bills or nulling their provenance." That reasoning is exactly conditional: where no bill references the lineage, the impossibility does not apply, and Postgres enforces the condition itself rather than the application promising it. That is the same standard D-51 held itself to, and the reason it is written down as a decision rather than allowed to appear as a helpful method: an undocumented exception to a project-wide invariant is how the invariant stops meaning anything.
+
+**Whole lineage, not the head:** deleting a template while four superseded versions linger is not a delete, and the bill check must walk **every** row in the lineage. A bill may reference an older version while a newer one is head — a head-only existence check would wrongly permit that delete and orphan a real bill's FK. This is the single most likely implementation error in F-4 and is called out in its verify step.
+
+**Refusal, not silent archive:** a delete button that sometimes archives without saying so trains the merchant to distrust every other control on the page. The cost is accepted: a merchant will occasionally hit a wall they did not expect, and the error message is what makes that survivable.
+
+**Consequence:** a deleted template is unrecoverable and its name is freed immediately. Archive remains the reversible path and keeps its name reserved (D-65).
+
+---
+
+### D-65 · Archive is a place with a way back; restore auto-suffixes
+
+**Decision:** archived templates leave the main list and appear in a separate archived view. `restore` clears `archivedAt`. Archived rows **keep** `isHead`, which is what keeps their names reserved against the D-63 index. A restore whose name has been taken in the meantime is auto-suffixed to `(n)` by the same allocator, rather than refused.
+
+**Reason:** the reservation falls out of the index for free — no additional logic — because archive touches `archivedAt` and never `isHead`. It also matches the merchant's mental model: an archived template still exists and is still theirs, so its name is still spoken for; a deleted one is gone, so its name is not.
+
+Auto-suffixing on restore rather than refusing is chosen because refusal puts the merchant in a dead end — they must rename a template they can no longer see in order to restore it. Suffixing always succeeds and leaves both rows live and distinguishable.
+
+**Consequence:** archiving "Retail Bill" and creating a new one yields "Retail Bill (1)". This will occasionally look surprising to a merchant who thinks of archive as removal. It is the intended trade for keeping archive fully reversible, and it is exactly the case delete exists to serve instead.
+
+---
+
+### D-66 · Creating from scratch requires name, `billType` and `skeleton`; `skeleton` is immutable thereafter
+
+**Decision:** `POST /portal/templates` takes `{ name, billType, skeleton }` and creates a `version: 1`, `parentTemplateId: null`, `isHead: true` row owned by the session merchant, starting from a **minimal document that already satisfies validation** — a visible `HEADER` and a visible `ITEMS`. `skeleton` is chosen once, here, and no write path accepts a change to it afterwards.
+
+**Reason:** "from scratch" cannot mean an empty canvas, for two independent reasons already decided. D-31 evaluates §8's required-block rule over **visible** blocks, so a blank document fails validation — a merchant could create a template and then never be able to save it. And `skeleton` is a required enum whose unrecognised values must throw rather than fall back (D-40); it is the card chrome — width, print styling, thermal strip versus full-width invoice — which the block editor cannot produce and which has no sensible default across bill types.
+
+**Immutability is the existing behaviour, made explicit:** `save()` already reconstructs `skeleton` from the parent and never trusts the client. Recording it as a decision means a future "let them change the skin" request is evaluated as a change to a written rule rather than as a small addition — it would let the render chrome of a live template change under a merchant between two bills.
+
+**Named gap:** there is no path to change a template's skeleton. A merchant who picks wrong must Save As into a new template with the right one. Accepted for this phase.
+
+---
+
+### D-67 · The UTILITY starter ships structurally complete and deliberately dataless
+
+**Decision:** add a `UTILITY` value to `TemplateSkeleton`, a renderer branch, and five new block types — `CONSUMER_INFO`, `BILLING_PERIOD`, `METER_READING`, `TARIFF_SLABS`, `DUE_DATE` — declared in the shared manifest (D-30) and in the renderer, each rendering **nothing** until a data source exists. Seed it as a sixth `merchantId: null` starter. **No field is added to `Bill.snapshot` and the D-17/D-28 whitelist is not extended.**
+
+**Reason:** the utility template was previously recorded as blocked (PENDING_WORK B5, SCOPE_v3) on a missing upstream data model — consumer number, billing period, meter readings, tariff slabs, due date have no source in either write path and no field in the snapshot. That block is real for the *data* and not for the *structure*. Shipping the structure now means the layout is designed and reviewed once, and the blocks light up with no template change when the data arrives.
+
+**The precedent is deliberate, not improvised:** `SAVINGS` and `LOYALTY` already ship in the Retail starter and render nothing, recorded as expected gaps rather than bugs. This applies the same pattern knowingly.
+
+**Why template-authored props cannot substitute:** `COUPON` carries its content in template props because a coupon headline is genuinely the same on every bill. A meter reading is per-bill data. Authoring it in the template would print the same reading on every customer's bill — worse than printing nothing, on a document a customer may rely on.
+
+**What making this real would cost, so the deferral is legible:** extending the direct-API input contract, extending `Bill.snapshot`'s whitelist (carrying D-17's full Tier-1 weight, key-set test extended to any nested shape), and a product ruling on whether a utility bill is a `TAX_INVOICE` or a third `BillType`. That is a phase, not a task.
+
+---
+
+### D-68 · Starter-versus-mine is a DTO projection, not a column
+
+**Decision:** the portal template DTO carries a boolean derived from `merchantId IS NULL`; the UI splits the list on it. **No column is added.**
+
+**Reason:** `Template.merchantId` already encodes ownership exactly, and `templates.service.ts` already relies on it in every method — `save()` refuses `merchantId: null` rows, the old `clone()` required them, `archive()` uses direct equality with no `OR` so a starter is unreachable there at all. Adding an `origin` or `isStarter` column would be a second representation of a fact the FK already holds — the precise pattern D-39 rejected.
+
+**Naming:** "starter" is the user-facing term for the shared catalogue. "Default" is reserved exclusively for D-60's two pointers. The two were conflated in early Phase-5 discussion and must not be again — a merchant's default may be a starter or one of their own, and a starter is not a default.
+
+---
+
+### D-69 · Resend: failed-only, stored recipient, a new row, refused while one is pending
+
+**Decision:** `POST /portal/bills/:id/resend` creates a **new** `Broadcast` row with `status: PENDING`, `attempts: 0`, and the **stored** recipient from the failed row. The original row is never mutated. Permitted only when the target broadcast is `FAILED`, and refused while any `PENDING` broadcast already exists for that order. `MERCHANT_ADMIN` only. No recipient is ever read from the request body.
+
+**Reason:** D-6 established the `Broadcast` table as an append-only queue, and D-7's `attempts` is per-broadcast retry state owned by the drainer. Resetting `attempts` or flipping the old row back to `PENDING` would conflate "the drainer retried" with "the merchant asked again" and would destroy the failure record. A new row keeps both facts.
+
+**Failed-only** because a resend of a delivered bill is a different feature with a different question behind it (the customer lost the email), and it has no failure to remediate.
+
+**Stored recipient only, non-negotiable:** accepting a merchant-supplied address turns the portal into "send any customer's bill to any address I choose" — a PII-egress abuse surface with no audit trail behind it and no product need. The recipient field is not read; a request carrying one has no effect, and F-series verification asserts that rather than assuming it.
+
+**The pending-refusal is the rate limit.** Without it, a merchant can queue unbounded sends to a real customer's address with repeated clicks. A time-based limit was considered and rejected as a tunable with no evidence behind the number; "at most one delivery in flight per order" is structural, needs no constant, and is exactly the invariant that matters.
+
+**This surfaces D-7's known limitation for the first time.** Rows exhausted past `MAX_BROADCAST_ATTEMPTS` while Mailhog was down have been permanently `FAILED` with no ops visibility since v1. R-1 makes them visible; R-2 makes them actionable. Neither changes the drainer.
+
+---
+
+### D-70 · `PiiExportAudit` is a prerequisite, append-only, and committed before the export is produced
+
+**Decision:** a new `PiiExportAudit` model recording merchant, user, timestamp, row count and the filters used. No update, delete or upsert method exists for it anywhere in the codebase. The audit row is written and **committed before** the export is produced. E-1 ships before E-2; no export path ships without it.
+
+**Reason:** D-48 recorded this as a literal precondition — "If export is ever built, it needs an audit table first, not after" — when it explained why single-record merchant reads are not exports and need no audit. Honouring that as a sequenced task rather than a follow-up is the whole point; a follow-up audit table is the same as no audit table for every export produced before it lands.
+
+**Commit-first is the safe direction, chosen deliberately:** a streamed file response cannot be transactional with a database write, so one of the two failure modes has to be accepted. Audit-then-export can leave an audit row for an export that failed midway — an over-count. Export-then-audit can produce a file with no record of it — an under-count, meaning PII left the system unlogged. Over-counting is the failure a compliance reviewer can reason about.
+
+**Scoped to exports, and it must stay that way.** This is not a general audit log. D-51's named gap — no login audit trail survives session reaping — is real and is **not** solved here; solving it means its own append-only table, decided on its own terms.
+
+**Unanswered, recorded rather than defaulted:** retention period, who may read the table, and whether append-only is enforced at the database (revoking `UPDATE`/`DELETE`) or only by the absence of code paths. Locally it is the latter. Owner: Compliance + Security.
+
+---
+
+### D-71 · Export contact projection is the merchant's declared choice, recorded in the audit row; `MERCHANT_ADMIN` only
+
+**Decision:** `GET /portal/bills/export.csv` requires an explicit `contact` parameter, either `masked` or `full`. **There is no default** — a missing or unrecognised value is `422` with no audit row and no file. The `PiiExportAudit` row records which projection was produced. The entire export route is `MERCHANT_ADMIN`; `STORE_STAFF` receives `403` for **both** projections.
+
+**Reason:** D-48 established two projections of the same data — masked in the bill list, full in the bill detail — and both have a legitimate export use. A masked export answers "which bills, what amounts, what delivery status", which is reconciliation. A full export answers "my customer contacts, in my CRM", and the merchant is the data controller for contacts they captured themselves — D-48's own argument for showing them in the detail view. Choosing one for the merchant would either hand them a file of `98****3210` for the most likely reason they wanted it, or make every reconciliation export a full PII egress. Letting the merchant declare intent per export, and recording that declaration, is what turns D-70's audit table from a formality into the thing it exists to be: a record of who took contact details, when, and how many.
+
+**No default, deliberately.** A default of `full` is unsafe. A default of `masked` is safe but produces a useless file for the merchant who wanted contacts, who then re-exports — doubling audit noise and training them to always pass `full`. Requiring the parameter makes every full-contact export a deliberate, recorded act, which is the only property that makes the audit trail worth reading.
+
+**Cost accepted:** two serializer paths and two key-set tests instead of one. The key-set test is the enforcement — a `masked` export containing a raw contact, or a `full` export containing a field outside D-48's detail set, must fail the build.
+
+**`MERCHANT_ADMIN` for the whole route, both projections.** D-50 gives `STORE_STAFF` read access to history, and an export is a read — but it is the read that produces a portable file which leaves the system entirely. Viewing one bill and carrying away fifty contacts are materially different acts, and this is the surface where that difference bites.
+
+**Runner-up, rejected:** allowing `STORE_STAFF` the masked projection only. It is defensible — masked data is what they already see in the list — but it produces four permission states on one route (two roles × two projections), and a permission matrix is exactly the kind of thing that is easy to write and hard to verify. One rule, verified once by A-6's real `STORE_STAFF` principal, is worth more than a slightly more generous one that nobody can hold in their head.
+
+**Consequence:** D-50's role gates become load-bearing for a data-egress path for the first time, having been written and never exercised since A-3. A-6's second seeded user is what proves them, and X-4 re-proves them.

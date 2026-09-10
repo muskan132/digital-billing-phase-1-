@@ -49,9 +49,10 @@ function canonical(value: unknown): string {
   return JSON.stringify(value, (_k, v) => (typeof v === 'bigint' ? v.toString() : v));
 }
 
+// Throws rather than process.exit()ing directly — an in-flight exit would skip the
+// try/finally cleanup below and defeat the entire point of this fix.
 function fail(message: string): never {
-  console.error(`\nFAIL — ${message}\n`);
-  process.exit(1);
+  throw new Error(`FAIL — ${message}`);
 }
 
 function buildDto(templateId: string, suffix: string): CreateBillDto {
@@ -83,6 +84,19 @@ function buildDto(templateId: string, suffix: string): CreateBillDto {
   };
 }
 
+// Mirrors verify-x3-final-regression.ts's cleanupMerchant() discipline: every row this
+// script creates under the real seeded merchant (a template lineage + the one bill
+// issued against its root) is deleted in FK-safe order, in a `finally`, so a run never
+// leaves scratch data behind regardless of how it exits.
+async function cleanupScratchData(prisma: PrismaService, orderId: string, lineage: string[]): Promise<void> {
+  await prisma.broadcast.deleteMany({ where: { orderId } });
+  await prisma.link.deleteMany({ where: { orderId } });
+  await prisma.orderItem.deleteMany({ where: { orderId } });
+  await prisma.bill.deleteMany({ where: { orderId } });
+  await prisma.order.deleteMany({ where: { id: orderId } });
+  await prisma.template.deleteMany({ where: { id: { in: lineage } } });
+}
+
 async function main() {
   const prisma = new PrismaService();
   const templatesService = new TemplatesService(prisma);
@@ -107,19 +121,32 @@ async function main() {
   const identifier = createResult.body.identifier;
   console.log(`PASS  createBill() — real bill ${createResult.body.bill_id}, link ${identifier}`);
 
-  const billRow = await prisma.bill.findUnique({ where: { id: createResult.body.bill_id }, select: { layoutSnapshot: true } });
+  const billRow = await prisma.bill.findUnique({ where: { id: createResult.body.bill_id }, select: { layoutSnapshot: true, orderId: true } });
   if (!billRow) fail('created bill not found immediately after createBill()');
   const originalSnapshot = billRow!.layoutSnapshot;
   const originalCanonical = canonical(originalSnapshot);
+  const orderId = billRow!.orderId;
   console.log('PASS  captured Bill.layoutSnapshot at issue time');
 
+  // Everything created from here down (the bill's Order/OrderItem/Link plus the whole
+  // template lineage) is scratch data under the REAL seeded merchant — cleaned up in
+  // the `finally` below no matter how the checks below turn out (D-59/H-1/W-3 discipline;
+  // this script previously left 4 rows behind per run with no cleanup at all).
+  const lineage = [cloned.id];
+  try {
+    await runChecks();
+  } finally {
+    await cleanupScratchData(prisma, orderId, lineage);
+    console.log(`Cleaned up scratch data: order ${orderId} and ${lineage.length} template row(s).`);
+  }
+
+  async function runChecks(): Promise<void> {
   // ---- Step 3: three real C-2 fork-on-write saves, each a distinct builder edit,
   // each checked against the bill immediately after.
   const parentBefore = await prisma.template.findUniqueOrThrow({ where: { id: cloned.id } });
   const parentLayoutBefore = canonical(parentBefore.layoutSchema);
 
   let headId = cloned.id;
-  const lineage = [cloned.id];
 
   const edits: Array<(doc: LayoutSchemaV2Doc) => LayoutSchemaV2Doc> = [
     // Edit 1: hide a non-required block.
@@ -201,6 +228,7 @@ async function main() {
     fail('final resolve() does not match the originally frozen layoutSnapshot');
   }
   console.log('PASS  final resolve() — rendered blocks match the original, unedited layout\n');
+  }
 
   console.log(`PASS — all checks passed. Bill ${createResult.body.bill_id} / link ${identifier} rendered its original layout through 3 real fork-on-write saves.\n`);
 

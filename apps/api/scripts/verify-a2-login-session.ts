@@ -109,11 +109,21 @@ async function main() {
   console.log(`   PASS — cookie value != stored tokenHash, and sha256(cookie) == stored tokenHash`);
   console.log(`   PASS — User.lastLoginAt updated: ${latestSession.user.lastLoginAt}\n`);
 
+  // A-5/D-57: /portal/logout is a mutating /portal route, so CsrfGuard requires
+  // this header now — fetched the same way every other write-path caller does
+  // (GET /portal/csrf-token under the live session), never derived locally.
+  // The token is an HMAC of the raw session cookie value only (csrf.util.ts) —
+  // it does not depend on the session row's revocation state in the DB — so the
+  // same token fetched here is reused for the replayed-cookie logout below too.
+  const csrfRes = await fetch(`${API_BASE}/portal/csrf-token`, { headers: { cookie: cookieHeader(jar) } });
+  if (!csrfRes.ok) fail(`could not obtain a CSRF token for the logged-in session: HTTP ${csrfRes.status}`);
+  const { token: csrfToken } = (await csrfRes.json()) as { token: string };
+
   // ---- 2. Logout, then replay the same cookie ----
   console.log('2. Logout, then replay the same (now-revoked) cookie...');
   const logout1 = await fetch(`${API_BASE}/portal/logout`, {
     method: 'POST',
-    headers: { cookie: cookieHeader(jar) },
+    headers: { cookie: cookieHeader(jar), 'x-csrf-token': csrfToken },
   });
   console.log(`   first logout: HTTP ${logout1.status}`);
   if (logout1.status !== 200) fail(`expected 200 on first logout, got ${logout1.status}`);
@@ -128,7 +138,7 @@ async function main() {
   // captured/replayed cookie is exactly the attack this must reject).
   const logout2 = await fetch(`${API_BASE}/portal/logout`, {
     method: 'POST',
-    headers: { cookie: `session=${sessionCookieValue}` },
+    headers: { cookie: `session=${sessionCookieValue}`, 'x-csrf-token': csrfToken },
   });
   console.log(`   replayed logout: HTTP ${logout2.status}`);
   if (logout2.status !== 401) fail(`expected 401 on replayed/revoked cookie, got ${logout2.status}`);
