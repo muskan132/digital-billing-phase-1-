@@ -973,4 +973,56 @@ describe('renderTemplate', () => {
     if (itemsBlock.type !== 'ITEMS' || itemsBlock.kind !== 'columns') throw new Error('expected columns ITEMS');
     expect(itemsBlock.rows[0].fields.name).toBe(maliciousName);
   });
+
+  // ==================== UTILITY starter (I-1 / D-67) ====================
+  // Structurally complete, deliberately dataless: the five industry blocks are
+  // declared and have a renderer branch, but that branch produces a block
+  // carrying ONLY its discriminant — no data, because no write path supplies
+  // any, and no template-authored props. "Dataless" is a property asserted
+  // here, not a comment. They light up with no template change once the data
+  // arrives.
+
+  const UTILITY_BLOCK_TYPES = ['CONSUMER_INFO', 'BILLING_PERIOD', 'METER_READING', 'TARIFF_SLABS', 'DUE_DATE'] as const;
+
+  it.each(UTILITY_BLOCK_TYPES)('UTILITY: %s renders as a bare dataless block — no fields beyond type/width', (type) => {
+    const result = renderTemplate([{ type, order: 1, props: {} }], TAX_INVOICE_SNAPSHOT, SAMPLE_MERCHANT);
+    expect(result).toEqual([{ width: 'full', type }]);
+  });
+
+  it.each(UTILITY_BLOCK_TYPES)('UTILITY: %s stays dataless even when props are supplied — per-bill data is never template-authored', (type) => {
+    const result = renderTemplate(
+      [{ type, order: 1, props: { consumerNumber: 'C-123', reading: '4210', dueDate: '2026-10-01' } }],
+      TAX_INVOICE_SNAPSHOT,
+      SAMPLE_MERCHANT,
+    );
+    expect(result).toEqual([{ width: 'full', type }]);
+  });
+
+  it('UTILITY: the full seeded starter layout renders end-to-end without throwing, in order', () => {
+    const seededUtilityLayout: LayoutBlock[] = [
+      { type: 'HEADER', order: 1, props: {} },
+      { type: 'CONSUMER_INFO', order: 2, props: {} },
+      { type: 'BILLING_PERIOD', order: 3, props: {} },
+      { type: 'METER_READING', order: 4, props: {} },
+      { type: 'TARIFF_SLABS', order: 5, props: {} },
+      { type: 'DUE_DATE', order: 6, props: {} },
+      { type: 'FOOTER', order: 7, props: {} },
+    ];
+    const result = renderTemplate(seededUtilityLayout, TAX_INVOICE_SNAPSHOT, SAMPLE_MERCHANT);
+    expect(result.map((b) => b.type)).toEqual([
+      'HEADER',
+      'CONSUMER_INFO',
+      'BILLING_PERIOD',
+      'METER_READING',
+      'TARIFF_SLABS',
+      'DUE_DATE',
+      'FOOTER',
+    ]);
+  });
+
+  it('UTILITY: an unknown block type is still rejected (D-10/D-40 not weakened by the new types)', () => {
+    expect(() => renderTemplate([{ type: 'TARIFF_SLABZ', order: 1, props: {} }], TAX_INVOICE_SNAPSHOT, SAMPLE_MERCHANT)).toThrow(
+      'Unknown block type',
+    );
+  });
 });

@@ -24,9 +24,11 @@ export function BillBlocks({ blocks, skeleton }: { blocks: RenderedBlock[]; skel
           ? 'retail'
           : skeleton === 'RESTAURANT'
             ? 'restaurant'
-            : (() => {
-                throw new Error(`Unknown skeleton: ${skeleton}`);
-              })();
+            : skeleton === 'UTILITY'
+              ? 'utility'
+              : (() => {
+                  throw new Error(`Unknown skeleton: ${skeleton}`);
+                })();
 
   return (
     <div className={`bill-card bill-card--${skin}`}>
@@ -408,5 +410,17 @@ function BillBlock({ block, skin }: { block: RenderedBlock; skin: string }) {
       if (contacts.length === 0) return null;
       return <footer className="bill-footer">Questions about this receipt? Contact us at {contacts.join(' · ')}</footer>;
     }
+
+    // I-1 (D-67): UTILITY starter blocks — declared and structurally complete,
+    // but with no data source yet they render nothing at all. This is the
+    // SAVINGS/LOYALTY pattern applied knowingly, not a stub to fill in later
+    // with placeholder text: an empty block is the honest state until a utility
+    // write path supplies real per-bill data. Asserted by a test.
+    case 'CONSUMER_INFO':
+    case 'BILLING_PERIOD':
+    case 'METER_READING':
+    case 'TARIFF_SLABS':
+    case 'DUE_DATE':
+      return null;
   }
 }

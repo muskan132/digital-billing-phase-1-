@@ -13,6 +13,7 @@ const TEMPLATE_RECEIPT_THERMAL_ID = 'seed-template-receipt-thermal';
 const TEMPLATE_TAX_INVOICE_ID = 'seed-template-tax-invoice';
 const TEMPLATE_RETAIL_ID = 'seed-template-retail';
 const TEMPLATE_RESTAURANT_ID = 'seed-template-restaurant';
+const TEMPLATE_UTILITY_ID = 'seed-template-utility';
 const MERCHANT_API_KEY_ID = 'seed-merchant-api-key-demo';
 const DEMO_API_KEY_FILE = path.join(__dirname, '..', '.demo-api-key.local');
 
@@ -27,6 +28,9 @@ const RECEIPT_LAYOUT_SCHEMA = [
   { type: 'FOOTER', order: 6, props: {} },
 ];
 
+// After seeding, run `pnpm --filter @digital-billing/api migrate:layout-schema-v2`
+// before `pnpm verify` — seed data ships at layoutSchema v1 (below) and this
+// migration is required, not optional; verify-v3-task's v2 check fails without it.
 async function main() {
   const secretKey = process.env.SECRET_KEY;
   if (!secretKey) {
@@ -322,6 +326,52 @@ async function main() {
     where: { id: TEMPLATE_RESTAURANT_ID },
     create: { id: TEMPLATE_RESTAURANT_ID, ...restaurantTemplateData },
     update: restaurantTemplateData,
+  });
+
+  // UTILITY starter — I-1 / D-67, docs/TEMPLATE_SYSTEM_v2.md §4.3. Shipped
+  // structurally complete and DELIBERATELY DATALESS: the five industry blocks
+  // (CONSUMER_INFO, BILLING_PERIOD, METER_READING, TARIFF_SLABS, DUE_DATE) are
+  // declared in the shared manifest and have a renderer branch, but that branch
+  // renders nothing — no write path supplies consumer numbers, billing periods,
+  // meter readings or tariff slabs, and none of it is template-authored copy.
+  // The SAVINGS/LOYALTY precedent, applied knowingly: the layout is designed and
+  // reviewed once, and the blocks light up with no template change when a
+  // utility data model arrives (a whole phase, per D-67 — extending the direct
+  // API contract, Bill.snapshot's whitelist, and a ruling on utility BillType).
+  //
+  // NOT DONE here, deliberately (D-67's deferred register):
+  //   - No Bill.snapshot field added; the D-17/D-28 whitelist is untouched.
+  //   - No money blocks (TOTAL/TAX_SUMMARY/AMOUNT_PAYABLE) and no CHARGES:
+  //     those need the deferred utility data model and the CHARGES-vs-ITEMS /
+  //     GST-exempt-tax-treatment decisions. Adding them now would only render
+  //     "Amount unavailable". The starter is the industry SPINE, dataless.
+  //   - billType is TAX_INVOICE: the enum has only RECEIPT | TAX_INVOICE, a
+  //     utility bill is not a payment receipt, and this matches the other
+  //     document-style starters (RETAIL/RESTAURANT). The "is a utility bill a
+  //     TAX_INVOICE or a third BillType" product ruling stays deferred (D-67) —
+  //     if it lands as a new BillType, this one row migrates. Seeded after the
+  //     other TAX_INVOICE starters, so resolveTaxInvoiceTemplate's oldest-by-
+  //     createdAt fallback is unaffected; a caller reaches this only via an
+  //     explicit template_id.
+  const utilityTemplateData = {
+    merchantId: null,
+    name: 'Utility Bill (UTILITY)',
+    billType: 'TAX_INVOICE' as const,
+    skeleton: 'UTILITY' as const,
+    layoutSchema: [
+      { type: 'HEADER', order: 1, props: {} },
+      { type: 'CONSUMER_INFO', order: 2, props: {} },
+      { type: 'BILLING_PERIOD', order: 3, props: {} },
+      { type: 'METER_READING', order: 4, props: {} },
+      { type: 'TARIFF_SLABS', order: 5, props: {} },
+      { type: 'DUE_DATE', order: 6, props: {} },
+      { type: 'FOOTER', order: 7, props: {} },
+    ],
+  };
+  await prisma.template.upsert({
+    where: { id: TEMPLATE_UTILITY_ID },
+    create: { id: TEMPLATE_UTILITY_ID, ...utilityTemplateData },
+    update: utilityTemplateData,
   });
 
   await prisma.merchant.update({

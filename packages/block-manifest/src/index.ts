@@ -8,14 +8,22 @@ export * from './validate-layout';
 // from here rather than declaring its own (D-30 rejects duplication-plus-
 // drift-test outright).
 //
-// Scope (T-3): covers only the block types actually rendered TODAY, read
-// directly out of apps/web/src/render/template-renderer.ts's KNOWN_BLOCK_TYPES
-// and cross-checked against every layoutSchema in apps/api/prisma/seed.ts.
-// This is 14 types, not the full 22-block catalogue in TEMPLATE_SYSTEM_v2.md
-// §3 — the 8 unused ones (CHARGES, SAVINGS's utility cousins, CONSUMER_INFO,
-// METER_READING, DUE_DATE, PAY_NOW, USAGE_COMPARISON, BILL_TO, MARKETING,
-// CUSTOM_CONTENT) have no renderer yet and are deliberately left out rather
-// than declared speculatively.
+// Scope (T-3): covers the block types actually rendered TODAY, read directly
+// out of apps/web/src/render/template-renderer.ts's KNOWN_BLOCK_TYPES and
+// cross-checked against every layoutSchema in apps/api/prisma/seed.ts.
+// This is 19 types, not the full 22-block catalogue in TEMPLATE_SYSTEM_v2.md
+// §3 — the remaining ones (CHARGES, PAY_NOW, USAGE_COMPARISON, BILL_TO,
+// MARKETING, CUSTOM_CONTENT) have no renderer yet and are deliberately left
+// out rather than declared speculatively.
+//
+// I-1 (D-67): the last five entries — CONSUMER_INFO, BILLING_PERIOD,
+// METER_READING, TARIFF_SLABS, DUE_DATE — are the UTILITY starter's blocks.
+// They are declared here and have a renderer branch, but that branch renders
+// NOTHING: no write path supplies consumer numbers, billing periods, meter
+// readings or tariff slabs, and D-67 deliberately ships the structure ahead
+// of the data (the SAVINGS/LOYALTY precedent, applied knowingly). They carry
+// no props for the same reason — a per-bill meter reading authored in the
+// template would print the same value on every customer's bill.
 
 export const BLOCK_TYPES = [
   'HEADER',
@@ -32,6 +40,12 @@ export const BLOCK_TYPES = [
   'SURVEY',
   'QR_CODE',
   'FOOTER',
+  // I-1 (D-67) — UTILITY starter, declared-but-dataless (see comment above).
+  'CONSUMER_INFO',
+  'BILLING_PERIOD',
+  'METER_READING',
+  'TARIFF_SLABS',
+  'DUE_DATE',
 ] as const;
 
 export type BlockType = (typeof BLOCK_TYPES)[number];
@@ -239,5 +253,48 @@ export const BLOCK_MANIFEST: Record<BlockType, BlockManifestEntry> = {
     props: {},
     defaults: {},
     renderer: 'FOOTER',
+  },
+
+  // ---- I-1 (D-67): UTILITY starter blocks — declared, structurally complete,
+  // deliberately dataless. Each has a renderer branch that returns an empty
+  // block (template-renderer.ts) which renders nothing (BillBlocks.tsx). No
+  // props: this is per-bill data (consumer number, period, readings, tariff
+  // slabs, due date), not template-authored copy, so it cannot be filled in
+  // here without printing the same value on every bill. They light up with no
+  // template change once a write path supplies the data. ----
+  CONSUMER_INFO: {
+    type: 'CONSUMER_INFO',
+    description: 'Consumer number and connection type (§3 #13). Dataless until a utility write path exists (D-67).',
+    props: {},
+    defaults: {},
+    renderer: 'CONSUMER_INFO',
+  },
+  BILLING_PERIOD: {
+    type: 'BILLING_PERIOD',
+    description: 'Billing period (from / to / reading dates). Dataless until a utility write path exists (D-67).',
+    props: {},
+    defaults: {},
+    renderer: 'BILLING_PERIOD',
+  },
+  METER_READING: {
+    type: 'METER_READING',
+    description: 'Previous / current reading and units consumed (§3 #14). Dataless until a utility write path exists (D-67).',
+    props: {},
+    defaults: {},
+    renderer: 'METER_READING',
+  },
+  TARIFF_SLABS: {
+    type: 'TARIFF_SLABS',
+    description: 'Slab-wise tariff / energy charges breakdown. Dataless until a utility write path exists (D-67).',
+    props: {},
+    defaults: {},
+    renderer: 'TARIFF_SLABS',
+  },
+  DUE_DATE: {
+    type: 'DUE_DATE',
+    description: 'Payment due date and late-payment surcharge (§3 #15). Dataless until a utility write path exists (D-67).',
+    props: {},
+    defaults: {},
+    renderer: 'DUE_DATE',
   },
 };

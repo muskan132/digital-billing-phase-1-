@@ -80,7 +80,7 @@ describe('BillBlocks skeleton validation (D-40)', () => {
     ).toThrow('Unknown skeleton: NOT_A_REAL_SKELETON');
   });
 
-  it.each(['MINIMALIST', 'COMPACT_THERMAL', 'RETAIL', 'RESTAURANT'])(
+  it.each(['MINIMALIST', 'COMPACT_THERMAL', 'RETAIL', 'RESTAURANT', 'UTILITY'])(
     'renders without throwing for the valid skeleton %s',
     (skeleton) => {
       const rendered = renderTemplate([{ type: 'HEADER', order: 1, props: {} }], SNAPSHOT, MERCHANT);
@@ -89,4 +89,36 @@ describe('BillBlocks skeleton validation (D-40)', () => {
       ).not.toThrow();
     },
   );
+});
+
+describe('BillBlocks UTILITY starter blocks (I-1 / D-67) render nothing', () => {
+  const UTILITY_BLOCK_TYPES = ['CONSUMER_INFO', 'BILLING_PERIOD', 'METER_READING', 'TARIFF_SLABS', 'DUE_DATE'] as const;
+
+  it.each(UTILITY_BLOCK_TYPES)('%s produces no DOM output — "dataless" is a property, not a comment', (type) => {
+    const rendered = renderTemplate([{ type, order: 1, props: {} }], SNAPSHOT, MERCHANT);
+    const html = renderToStaticMarkup(React.createElement(BillBlocks, { blocks: rendered, skeleton: 'UTILITY' }));
+    // The only markup is the always-present card shell + PAID badge — no block
+    // element, no placeholder text, nothing keyed to the block type.
+    expect(html).toBe('<div class="bill-card bill-card--utility"><span class="bill-paid-badge">PAID</span></div>');
+  });
+
+  it('the full seeded UTILITY starter renders only HEADER and FOOTER; the five industry blocks contribute nothing', () => {
+    const blocks = [
+      { type: 'HEADER', order: 1, props: {} },
+      { type: 'CONSUMER_INFO', order: 2, props: {} },
+      { type: 'BILLING_PERIOD', order: 3, props: {} },
+      { type: 'METER_READING', order: 4, props: {} },
+      { type: 'TARIFF_SLABS', order: 5, props: {} },
+      { type: 'DUE_DATE', order: 6, props: {} },
+      { type: 'FOOTER', order: 7, props: {} },
+    ];
+    const rendered = renderTemplate(blocks, { ...SNAPSHOT, merchantName: 'City Power Co' }, { name: 'City Power Co', supportEmail: 'care@citypower.test' });
+    const html = renderToStaticMarkup(React.createElement(BillBlocks, { blocks: rendered, skeleton: 'UTILITY' }));
+
+    expect(html).toContain('City Power Co');
+    expect(html).toContain('care@citypower.test');
+    expect(html).not.toContain('CONSUMER');
+    expect(html).not.toContain('METER');
+    expect(html).not.toContain('TARIFF');
+  });
 });

@@ -89,6 +89,32 @@ describe('validateLayoutSchema', () => {
     });
   });
 
+  describe('UTILITY starter block types (I-1 / D-67)', () => {
+    it('accepts the five new block types — they are in the manifest, so the unknown-type rule does not fire', () => {
+      const withUtilityBlocks = doc([
+        block({ id: 'blk_h', type: 'HEADER', order: 1 }),
+        block({ id: 'blk_i', type: 'ITEMS', order: 2 }),
+        block({ id: 'blk_c', type: 'CONSUMER_INFO', order: 3 }),
+        block({ id: 'blk_p', type: 'BILLING_PERIOD', order: 4 }),
+        block({ id: 'blk_m', type: 'METER_READING', order: 5 }),
+        block({ id: 'blk_t', type: 'TARIFF_SLABS', order: 6 }),
+        block({ id: 'blk_d', type: 'DUE_DATE', order: 7 }),
+      ]);
+      expect(validateLayoutSchema(withUtilityBlocks, BLOCK_MANIFEST)).toEqual([]);
+    });
+
+    it('still rejects an unknown block type alongside the new ones (D-10/D-40 not weakened)', () => {
+      const withUnknown = doc([
+        block({ id: 'blk_h', type: 'HEADER', order: 1 }),
+        block({ id: 'blk_i', type: 'ITEMS', order: 2 }),
+        block({ id: 'blk_t', type: 'TARIFF_SLABS', order: 3 }),
+        block({ id: 'blk_x', type: 'TARIFF_SLABZ', order: 4 }),
+      ]);
+      const issues = validateLayoutSchema(withUnknown, BLOCK_MANIFEST);
+      expect(issues).toEqual([{ severity: 'error', blockId: 'blk_x', message: 'Unknown block type "TARIFF_SLABZ"' }]);
+    });
+  });
+
   describe('HEADER + ITEMS/CHARGES presence (D-31)', () => {
     it('flags a document-level issue (no blockId) when HEADER is entirely absent', () => {
       const noHeader = doc(VALID_DOC.blocks.filter((b) => b.type !== 'HEADER'));

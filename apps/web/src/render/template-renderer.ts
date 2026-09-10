@@ -5,7 +5,8 @@ import { BLOCK_TYPES as KNOWN_BLOCK_TYPES, BlockType } from '@digital-billing/bl
 // declaration of every valid layoutSchema block type, imported here rather than
 // declared locally, per D-30's rejection of duplication-plus-a-drift-test. See
 // packages/block-manifest/src/index.ts for the full per-type prop/renderer
-// declaration and the rationale for exactly this 14-type set.
+// declaration and the rationale for this set (14 rendering block types plus
+// the five declared-but-dataless UTILITY starter blocks, I-1 / D-67).
 
 export interface LayoutBlock {
   type: string;
@@ -138,7 +139,7 @@ export interface BillMerchant {
 
 // U-3: `width` is attached via this intersection over a SEPARATELY named union
 // (RenderedBlockContent) — renderBlock returns the un-widthed content type below and
-// renderTemplate's single call site adds `width` via spread, so none of the 14 cases
+// renderTemplate's single call site adds `width` via spread, so none of the cases
 // below need to change for row-grouping, and (importantly) Omit<RenderedBlock,'width'>
 // was avoided here on purpose: Omit does not distribute cleanly over an intersected
 // union and would have collapsed the discriminated-union narrowing every consumer of
@@ -276,7 +277,19 @@ type RenderedBlockContent =
       type: 'FOOTER';
       supportEmail: string | null | undefined;
       supportPhone: string | null | undefined;
-    };
+    }
+  // I-1 (D-67): UTILITY starter blocks. Structurally present, deliberately
+  // dataless — no write path supplies consumer numbers, billing periods, meter
+  // readings, tariff slabs or due dates, and none of it is template-authored
+  // copy (a per-bill meter reading in the template would print on every bill).
+  // Each carries only its discriminant: renderBlock returns it, BillBlocks
+  // renders nothing for it. "Dataless" is asserted by a test, not just this
+  // comment. They light up with no template change once the data arrives.
+  | { type: 'CONSUMER_INFO' }
+  | { type: 'BILLING_PERIOD' }
+  | { type: 'METER_READING' }
+  | { type: 'TARIFF_SLABS' }
+  | { type: 'DUE_DATE' };
 
 export type RenderedBlock = { width: 'full' | 'half' | 'third' } & RenderedBlockContent;
 
@@ -520,6 +533,19 @@ function renderBlock(block: LayoutBlock, snapshot: BillSnapshot, merchant: BillM
         supportEmail: merchant.supportEmail,
         supportPhone: merchant.supportPhone,
       };
+    // I-1 (D-67): UTILITY starter blocks — no data source anywhere yet, and no
+    // template-authored props (see RenderedBlock comment). Return the bare
+    // block; BillBlocks renders nothing for it.
+    case 'CONSUMER_INFO':
+      return { type: 'CONSUMER_INFO' };
+    case 'BILLING_PERIOD':
+      return { type: 'BILLING_PERIOD' };
+    case 'METER_READING':
+      return { type: 'METER_READING' };
+    case 'TARIFF_SLABS':
+      return { type: 'TARIFF_SLABS' };
+    case 'DUE_DATE':
+      return { type: 'DUE_DATE' };
   }
 }
 
