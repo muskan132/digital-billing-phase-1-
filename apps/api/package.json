@@ -24,6 +24,7 @@
     "verify:r1": "ts-node scripts/verify-r1-delivery-visibility.ts",
     "verify:r2": "ts-node scripts/verify-r2-resend.ts",
     "verify:e2": "ts-node scripts/verify-e2-csv-export.ts",
+    "verify:x4": "ts-node scripts/verify-x4-final-regression.ts",
     "test": "jest"
   },
   "dependencies": {
