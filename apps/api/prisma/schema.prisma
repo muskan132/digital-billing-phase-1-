@@ -164,6 +164,9 @@ model Order {
   createdAt              DateTime    @default(now())
 
   @@index([merchantId])
+  // S-12: supports N-2's per-merchant sale-time aggregates and range queries
+  // over Order.saleAt (already existing, already nullable — no column added).
+  @@index([merchantId, saleAt])
 }
 
 model OrderItem {
