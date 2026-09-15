@@ -264,6 +264,69 @@ describe('BillsService.createBill', () => {
     expect(call.create.bill.create.billType).toBe('TAX_INVOICE');
   });
 
+  // ---- Q-7 / D-28 addendum: the REAL key-set enforcement against P-2's actual
+  // written snapshot object (bills.service.ts), not a mock or a fixture stand-in.
+  // Neither links.service.spec.ts's ALLOWED_BILL_KEYS (Prisma-select shape, where
+  // `snapshot` is one opaque key) nor preview-fixtures.spec.ts's SNAPSHOT_WHITELIST
+  // (a loose subset check over synthetic fixtures) exercises this literal object.
+  describe('D-28 whitelist enforcement against the real snapshot writer (Q-7)', () => {
+    const PRE_Q7_SNAPSHOT_KEYS = [
+      'merchantName',
+      'currency',
+      'amountPaise',
+      'invoiceNumber',
+      'placeOfSupply',
+      'merchantGstin',
+      'merchantState',
+      'merchantAddress',
+      'subtotalPaise',
+      'discountPaise',
+      'taxPaise',
+      'cgstPaise',
+      'sgstPaise',
+      'igstPaise',
+      'items',
+    ].sort();
+
+    const ITEM_KEYS = [
+      'lineNo',
+      'name',
+      'hsn',
+      'uom',
+      'quantity',
+      'unitPricePaise',
+      'itemDiscountPaise',
+      'billDiscountAllocPaise',
+      'taxRateBp',
+      'taxableValuePaise',
+      'taxPaise',
+      'cgstPaise',
+      'sgstPaise',
+      'igstPaise',
+    ].sort();
+
+    it('without invoice_date: snapshot key set is exactly the pre-Q-7 whitelist — no invoiceDate key at all', async () => {
+      const dto = validDto(); // no invoice_date
+      await service.createBill(dto, MERCHANT_A.id);
+
+      const snapshot = orderUpsert.mock.calls[0][0].create.bill.create.snapshot;
+      expect(Object.keys(snapshot).sort()).toEqual(PRE_Q7_SNAPSHOT_KEYS);
+      expect(snapshot).not.toHaveProperty('invoiceDate');
+      for (const item of snapshot.items) {
+        expect(Object.keys(item).sort()).toEqual(ITEM_KEYS);
+      }
+    });
+
+    it('with invoice_date supplied: snapshot key set is exactly the whitelist plus invoiceDate — no other key appears, value carried through unmodified', async () => {
+      const dto = validDto({ invoice_date: '2026-09-16' });
+      await service.createBill(dto, MERCHANT_A.id);
+
+      const snapshot = orderUpsert.mock.calls[0][0].create.bill.create.snapshot;
+      expect(Object.keys(snapshot).sort()).toEqual([...PRE_Q7_SNAPSHOT_KEYS, 'invoiceDate'].sort());
+      expect(snapshot.invoiceDate).toBe('2026-09-16');
+    });
+  });
+
   // ---- F-7 (D-61 / D-77): direct-API template resolution contract ----------
   describe('resolveTaxInvoiceTemplate (F-7 / D-61 / D-77)', () => {
     it('no template_id → uses Merchant.defaultTaxInvoiceTemplateId, no template_fallback in the body', async () => {

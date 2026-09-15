@@ -124,8 +124,7 @@ body {
   justify-content: space-between;
 }
 
-.bill-card--minimalist .bill-item-row,
-.bill-card--minimalist .bill-tax-summary-row {
+.bill-card--minimalist .bill-item-row {
   display: flex;
   justify-content: space-between;
   gap: 8px;
@@ -134,15 +133,13 @@ body {
   padding: 4px 0;
 }
 
-.bill-card--minimalist .bill-item-row span,
-.bill-card--minimalist .bill-tax-summary-row span {
+.bill-card--minimalist .bill-item-row span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.bill-card--minimalist .bill-item-row--head,
-.bill-card--minimalist .bill-tax-summary-row--head {
+.bill-card--minimalist .bill-item-row--head {
   color: var(--slate);
   font-size: 11px;
   text-transform: uppercase;
@@ -244,8 +241,7 @@ body {
   justify-content: space-between;
 }
 
-.bill-card--thermal .bill-item-row,
-.bill-card--thermal .bill-tax-summary-row {
+.bill-card--thermal .bill-item-row {
   display: flex;
   justify-content: space-between;
   gap: 6px;
@@ -253,15 +249,13 @@ body {
   padding: 2px 0;
 }
 
-.bill-card--thermal .bill-item-row span,
-.bill-card--thermal .bill-tax-summary-row span {
+.bill-card--thermal .bill-item-row span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.bill-card--thermal .bill-item-row--head,
-.bill-card--thermal .bill-tax-summary-row--head {
+.bill-card--thermal .bill-item-row--head {
   text-transform: uppercase;
   letter-spacing: 0.5px;
   color: var(--slate);

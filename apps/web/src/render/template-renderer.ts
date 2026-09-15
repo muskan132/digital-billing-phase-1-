@@ -41,6 +41,10 @@ export interface BillSnapshot {
   merchantGstin?: string | null;
   merchantState?: string | null;
   merchantAddress?: string | null;
+  // Q-7 / D-88 addendum: present only when the caller supplied invoice_date at
+  // creation. Absent (not null) on bills issued before this field existed — never
+  // backfilled.
+  invoiceDate?: string;
   subtotalPaise?: string;
   discountPaise?: string;
   taxPaise?: string;
@@ -84,24 +88,6 @@ export interface RenderedLineItem {
   taxRateBp: number;
   taxableValuePaise: string;
   taxPaise: string;
-}
-
-// One row per distinct tax rate, summed across all lines at that rate (V-5).
-//
-// KNOWN BUG (logged, not fixed here — see memory/project_tax_compliant_known_bugs.md):
-// this is exactly the CGST/SGST-as-columns matrix docs/TEMPLATE_SYSTEM_v2.md §5 forbids
-// ("Never a rate-matrix with CGST/SGST as columns — no real bill does that"). Built in
-// V-5, before that doc existed in this session. Kept as-is, tagged 'legacy_matrix' on
-// the RenderedBlock TAX_SUMMARY variant below, so TAX_COMPLIANT's existing rendering is
-// undisturbed — the RETAIL template (which needs the correct shape) uses the 'aggregate'
-// variant instead. Do not extend this shape further; fix it directly via the tracked
-// follow-up task instead.
-export interface TaxSummaryRow {
-  taxRateBp: number;
-  taxableValuePaise: string;
-  cgstPaise: string;
-  sgstPaise: string;
-  igstPaise: string;
 }
 
 // docs/TEMPLATE_SYSTEM_v2.md §2 — the column-config model: field is the immutable data
@@ -163,11 +149,10 @@ type RenderedBlockContent =
     }
   // 'tax_invoice' (TAX_COMPLIANT, BUG 1 fix): the two-column seller/invoice-meta block.
   // Sourced entirely from the FROZEN snapshot (merchantName/merchantAddress/
-  // merchantGstin/invoiceNumber/placeOfSupply), never the live `merchant` param — BR-2
-  // immutability: a tax invoice's printed seller details must reflect what was true at
-  // issue time, not the merchant's current profile. No invoice date: Bill.snapshot
-  // carries no date field for TAX_INVOICE bills (tracked separately in memory —
-  // project_tax_compliant_known_bugs.md §3 — not fabricated here).
+  // merchantGstin/invoiceNumber/placeOfSupply/invoiceDate), never the live `merchant`
+  // param — BR-2 immutability: a tax invoice's printed seller details must reflect what
+  // was true at issue time, not the merchant's current profile. invoiceDate is
+  // undefined on bills issued before Q-7 — never fabricated (D-88).
   | {
       type: 'MERCHANT_INFO';
       kind: 'tax_invoice';
@@ -175,12 +160,11 @@ type RenderedBlockContent =
       address: string | null | undefined;
       gstin: string | null | undefined;
       invoiceNumber: string | undefined;
+      invoiceDate: string | undefined;
       placeOfSupply: string | undefined;
     }
-  // §3 catalogue #3 — bill no. only, in practice. `date` carries the same field shape
-  // as SAVINGS/LOYALTY: built to spec, never fabricated. No date field exists anywhere
-  // in Bill.snapshot (tracked in memory: project_tax_compliant_known_bugs.md §3) — so
-  // `date` is always undefined until that persistence gap gets its own follow-up task.
+  // §3 catalogue #3 — bill no. + date (Q-7 / D-88: sourced from snapshot.invoiceDate,
+  // undefined on bills issued before this field existed — never fabricated).
   | { type: 'BILL_META'; billNumber: string | undefined; date: string | undefined }
   // 'single': no line items on the snapshot (RECEIPT bills — FSD BR-23 confirms a
   // Payment Receipt has no line-item section) — the original one-row summary.
@@ -208,10 +192,11 @@ type RenderedBlockContent =
       paymentInstId: string | null | undefined;
       merchantTxnNo: string | null | undefined;
     }
-  // 'legacy_matrix' (V-5): TAX_COMPLIANT's existing, known-wrong shape — see
-  // TaxSummaryRow's comment. Untouched by the RETAIL task.
+  // Q-6 (D-97): the forbidden CGST/SGST-as-columns matrix ('legacy_matrix') is
+  // removed — 'aggregate' is now the sole TAX_SUMMARY shape, for every
+  // skeleton, per TEMPLATE_SYSTEM_v2 §5's requirement.
   //
-  // KNOWN LIMITATION on isIntraState, both kinds (flagged, not fixed — would require
+  // KNOWN LIMITATION on isIntraState (flagged, not fixed — would require
   // reopening P-2/L-3's locked schema): derived from whether igstPaise is zero/absent.
   // A fully zero-rated bill (every line taxRateBp=0) produces cgst=sgst=igst=0
   // regardless of the bill's actual place of supply, because D-24's split logic yields
@@ -227,7 +212,6 @@ type RenderedBlockContent =
   // percentages — just the bill-level Taxable Amount, one CGST row, one SGST row (or
   // one IGST row inter-state), each summed across ALL rates directly from
   // snapshot.items, and Total Tax = cgstPaise + sgstPaise (or igstPaise).
-  | { type: 'TAX_SUMMARY'; kind: 'legacy_matrix'; isIntraState: boolean; rows: TaxSummaryRow[]; currency: string }
   | {
       type: 'TAX_SUMMARY';
       kind: 'aggregate';
@@ -337,6 +321,7 @@ function renderBlock(block: LayoutBlock, snapshot: BillSnapshot, merchant: BillM
           address: snapshot.merchantAddress,
           gstin: snapshot.merchantGstin,
           invoiceNumber: snapshot.invoiceNumber,
+          invoiceDate: snapshot.invoiceDate,
           placeOfSupply: snapshot.placeOfSupply,
         };
       }
@@ -352,8 +337,7 @@ function renderBlock(block: LayoutBlock, snapshot: BillSnapshot, merchant: BillM
       };
     }
     case 'BILL_META':
-      // date always undefined — see the RenderedBlock comment above.
-      return { type: 'BILL_META', billNumber: snapshot.invoiceNumber, date: undefined };
+      return { type: 'BILL_META', billNumber: snapshot.invoiceNumber, date: snapshot.invoiceDate };
     case 'ITEMS': {
       const hasItems = snapshot.items && snapshot.items.length > 0;
 
@@ -429,64 +413,32 @@ function renderBlock(block: LayoutBlock, snapshot: BillSnapshot, merchant: BillM
       const isIntraState = !snapshot.igstPaise || snapshot.igstPaise === '0';
       const currency = snapshot.currency ?? AMOUNT_UNAVAILABLE;
 
-      // RETAIL, final spec — opted into via any explicit props.mode (RETAIL's seed sets
-      // 'auto'; the value no longer selects among sub-modes, there is only one — it just
-      // distinguishes this template's aggregate system from TAX_COMPLIANT's untouched
-      // legacy_matrix below, whose seed has no props.mode at all).
-      if (block.props.mode) {
-        let taxableValuePaise = BigInt(0);
-        let cgstPaise = BigInt(0);
-        let sgstPaise = BigInt(0);
-        let igstPaise = BigInt(0);
-        for (const item of items) {
-          taxableValuePaise += BigInt(item.taxableValuePaise);
-          cgstPaise += BigInt(item.cgstPaise);
-          sgstPaise += BigInt(item.sgstPaise);
-          igstPaise += BigInt(item.igstPaise);
-        }
-        const totalTaxPaise = isIntraState ? cgstPaise + sgstPaise : igstPaise;
-        return {
-          type: 'TAX_SUMMARY',
-          kind: 'aggregate',
-          isIntraState,
-          taxableValuePaise: taxableValuePaise.toString(),
-          cgstPaise: cgstPaise.toString(),
-          sgstPaise: sgstPaise.toString(),
-          igstPaise: igstPaise.toString(),
-          totalTaxPaise: totalTaxPaise.toString(),
-          currency,
-        };
-      }
-
-      // 'legacy_matrix' — TAX_COMPLIANT's existing, known-wrong shape (see
-      // TaxSummaryRow's comment). Untouched.
-      const groups = new Map<
-        number,
-        { taxableValuePaise: bigint; cgstPaise: bigint; sgstPaise: bigint; igstPaise: bigint }
-      >();
+      // Q-6 (D-97): 'aggregate' is the sole TAX_SUMMARY shape — one CGST row,
+      // one SGST row (or one IGST row inter-state), each summed across ALL
+      // tax rates, regardless of props.mode. TEMPLATE_SYSTEM_v2 §5 forbids
+      // the per-rate matrix unconditionally, not just when a template opts in.
+      let taxableValuePaise = BigInt(0);
+      let cgstPaise = BigInt(0);
+      let sgstPaise = BigInt(0);
+      let igstPaise = BigInt(0);
       for (const item of items) {
-        const g = groups.get(item.taxRateBp) ?? {
-          taxableValuePaise: BigInt(0),
-          cgstPaise: BigInt(0),
-          sgstPaise: BigInt(0),
-          igstPaise: BigInt(0),
-        };
-        g.taxableValuePaise += BigInt(item.taxableValuePaise);
-        g.cgstPaise += BigInt(item.cgstPaise);
-        g.sgstPaise += BigInt(item.sgstPaise);
-        g.igstPaise += BigInt(item.igstPaise);
-        groups.set(item.taxRateBp, g);
+        taxableValuePaise += BigInt(item.taxableValuePaise);
+        cgstPaise += BigInt(item.cgstPaise);
+        sgstPaise += BigInt(item.sgstPaise);
+        igstPaise += BigInt(item.igstPaise);
       }
-      const legacyRows: TaxSummaryRow[] = [...groups.entries()]
-        .sort(([a], [b]) => a - b)
-        .map(([taxRateBp, g]) => ({
-          taxRateBp,
-          taxableValuePaise: g.taxableValuePaise.toString(),
-          cgstPaise: g.cgstPaise.toString(),
-          sgstPaise: g.sgstPaise.toString(),
-          igstPaise: g.igstPaise.toString(),
-        }));
-      return { type: 'TAX_SUMMARY', kind: 'legacy_matrix', isIntraState, rows: legacyRows, currency };
+      const totalTaxPaise = isIntraState ? cgstPaise + sgstPaise : igstPaise;
+      return {
+        type: 'TAX_SUMMARY',
+        kind: 'aggregate',
+        isIntraState,
+        taxableValuePaise: taxableValuePaise.toString(),
+        cgstPaise: cgstPaise.toString(),
+        sgstPaise: sgstPaise.toString(),
+        igstPaise: igstPaise.toString(),
+        totalTaxPaise: totalTaxPaise.toString(),
+        currency,
+      };
     }
     case 'TOTAL': {
       if (block.props.basis === 'pre_tax' && snapshot.subtotalPaise !== undefined && snapshot.discountPaise !== undefined) {

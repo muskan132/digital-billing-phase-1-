@@ -241,41 +241,8 @@ function BillBlock({ block, skin }: { block: RenderedBlock; skin: string }) {
     }
 
     case 'TAX_SUMMARY': {
-      if (block.kind === 'legacy_matrix') {
-        if (block.rows.length === 0) return null;
-        return (
-          <div className="bill-tax-summary">
-            <div className="bill-tax-summary-row bill-tax-summary-row--head">
-              <span>Rate</span>
-              <span>Taxable</span>
-              {block.isIntraState ? (
-                <>
-                  <span>CGST</span>
-                  <span>SGST</span>
-                </>
-              ) : (
-                <span>IGST</span>
-              )}
-            </div>
-            {block.rows.map((row) => (
-              <div className="bill-tax-summary-row" key={row.taxRateBp}>
-                <span>{(row.taxRateBp / 100).toString()}%</span>
-                <span>{formatMoney(row.taxableValuePaise, block.currency)}</span>
-                {block.isIntraState ? (
-                  <>
-                    <span>{formatMoney(row.cgstPaise, block.currency)}</span>
-                    <span>{formatMoney(row.sgstPaise, block.currency)}</span>
-                  </>
-                ) : (
-                  <span>{formatMoney(row.igstPaise, block.currency)}</span>
-                )}
-              </div>
-            ))}
-          </div>
-        );
-      }
-
-      // 'aggregate' (RETAIL, final §5 spec): Taxable Amount, one CGST row, one SGST
+      // Q-6 (D-97): 'aggregate' is the only shape — the forbidden CGST/SGST-
+      // as-columns matrix is gone. Taxable Amount, one CGST row, one SGST
       // row (or one IGST row inter-state) — each already summed across ALL tax rates
       // in the data layer, no per-rate breakdown, no rate percentages, no matter how
       // many distinct tax rates are on the bill. Total Tax closes the block.

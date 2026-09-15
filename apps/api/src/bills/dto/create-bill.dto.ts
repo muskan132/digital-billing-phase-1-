@@ -46,6 +46,9 @@ export interface CreateBillContactDto {
 export interface CreateBillDto {
   external_transaction_id: string;
   invoice_number: string;
+  // D-88 addendum: optional, additive — the document date, distinct from sale_at
+  // (transaction time). Never inferred from sale_at.
+  invoice_date?: string;
   place_of_supply: string;
   currency: string;
   sale_at: string;

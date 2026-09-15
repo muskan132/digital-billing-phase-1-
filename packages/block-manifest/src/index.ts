@@ -159,12 +159,12 @@ export const BLOCK_MANIFEST: Record<BlockType, BlockManifestEntry> = {
   TAX_SUMMARY: {
     type: 'TAX_SUMMARY',
     description:
-      "Tax component ladder (§5). props.mode='auto' selects the corrected 'aggregate' shape (one CGST/SGST or IGST row, summed across all rates); absent props.mode falls back to the known-wrong 'legacy_matrix' shape kept only for TAX_COMPLIANT (see template-renderer.ts's TaxSummaryRow comment — tracked bug, not fixed here).",
+      'Tax component ladder (§5): one CGST row, one SGST row (or one IGST row inter-state), each summed across all tax rates — the only shape, regardless of props.mode. Q-6 (D-97) removed the forbidden per-rate CGST/SGST-as-columns matrix entirely.',
     props: {
       mode: {
         type: 'string',
         required: false,
-        description: "'auto' selects the correct §5 aggregate ladder. Any other value (including absent) keeps the legacy per-rate matrix.",
+        description: 'Vestigial — TAX_SUMMARY always renders the §5 aggregate ladder regardless of this value. Kept only for existing seed data compatibility.',
       },
     },
     defaults: {},

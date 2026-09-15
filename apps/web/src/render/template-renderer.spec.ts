@@ -323,10 +323,23 @@ describe('renderTemplate', () => {
     expect(result[0].width).toBe('full');
   });
 
-  it('renders TAX_SUMMARY with no rows when the snapshot has no items (e.g. a RECEIPT snapshot), without throwing', () => {
+  it('renders TAX_SUMMARY with all-zero aggregates when the snapshot has no items (e.g. a RECEIPT snapshot), without throwing', () => {
     const result = renderTemplate([{ type: 'TAX_SUMMARY', order: 1, props: {} }], SAMPLE_SNAPSHOT, SAMPLE_MERCHANT);
 
-    expect(result).toEqual([{ width: 'full', type: 'TAX_SUMMARY', kind: 'legacy_matrix', isIntraState: true, rows: [], currency: 'INR' }]);
+    expect(result).toEqual([
+      {
+        width: 'full',
+        type: 'TAX_SUMMARY',
+        kind: 'aggregate',
+        isIntraState: true,
+        taxableValuePaise: '0',
+        cgstPaise: '0',
+        sgstPaise: '0',
+        igstPaise: '0',
+        totalTaxPaise: '0',
+        currency: 'INR',
+      },
+    ]);
   });
 
   it('renders the seeded TAX_COMPLIANT layoutSchema (T-2) end-to-end without throwing', () => {
@@ -368,9 +381,25 @@ describe('renderTemplate', () => {
         address: undefined, // TAX_INVOICE_SNAPSHOT has no merchantAddress set in this fixture
         gstin: '27ABCDE1234F1Z5', // from TAX_INVOICE_SNAPSHOT.merchantGstin, not the live merchant's "99ZZZZZ..."
         invoiceNumber: 'INV-2026-0001',
+        invoiceDate: undefined, // Q-7: TAX_INVOICE_SNAPSHOT has no invoiceDate set (pre-existing-bill case)
         placeOfSupply: '27',
       },
     ]);
+  });
+
+  it('Q-7: MERCHANT_INFO "tax_invoice" sources invoiceDate from the snapshot when present', () => {
+    const snapshot: BillSnapshot = { ...TAX_INVOICE_SNAPSHOT, invoiceDate: '2026-09-16' };
+    const result = renderTemplate(
+      [{ type: 'MERCHANT_INFO', order: 1, props: { variant: 'tax_invoice' } }],
+      snapshot,
+      SAMPLE_MERCHANT,
+    );
+
+    const block = result[0];
+    expect(block.type).toBe('MERCHANT_INFO');
+    if (block.type === 'MERCHANT_INFO' && block.kind === 'tax_invoice') {
+      expect(block.invoiceDate).toBe('2026-09-16');
+    }
   });
 
   it('BUG 1 fix: MERCHANT_INFO without props.variant keeps the existing "receipt" behavior (other skeletons unaffected)', () => {
@@ -519,25 +548,30 @@ describe('renderTemplate', () => {
 
   // ---- V-5: TAX_SUMMARY grouped by rate ----
 
-  it('V-5: TAX_SUMMARY groups by tax rate and sums exactly, intra-state shows CGST+SGST (isIntraState: true)', () => {
+  // Q-6 (D-97): the forbidden matrix is gone — TAX_SUMMARY always renders
+  // 'aggregate' regardless of props.mode, so these three tests (previously
+  // asserting the legacy per-rate 'legacy_matrix' shape when props.mode was
+  // absent) now assert the same aggregate ladder RETAIL uses.
+  it('Q-6: TAX_SUMMARY with no props.mode still aggregates (never the forbidden matrix), intra-state shows CGST+SGST summed across rates', () => {
     const result = renderTemplate([{ type: 'TAX_SUMMARY', order: 1, props: {} }], TAX_INVOICE_SNAPSHOT, SAMPLE_MERCHANT);
 
     expect(result).toEqual([
       {
         width: 'full',
         type: 'TAX_SUMMARY',
-        kind: 'legacy_matrix',
+        kind: 'aggregate',
         isIntraState: true,
+        taxableValuePaise: '25000', // 20000 + 5000
+        cgstPaise: '950', // 500 + 450
+        sgstPaise: '950', // 500 + 450
+        igstPaise: '0',
+        totalTaxPaise: '1900',
         currency: 'INR',
-        rows: [
-          { taxRateBp: 500, taxableValuePaise: '20000', cgstPaise: '500', sgstPaise: '500', igstPaise: '0' },
-          { taxRateBp: 1800, taxableValuePaise: '5000', cgstPaise: '450', sgstPaise: '450', igstPaise: '0' },
-        ],
       },
     ]);
   });
 
-  it('V-5: TAX_SUMMARY shows IGST for an inter-state bill (isIntraState: false), no CGST/SGST', () => {
+  it('Q-6: TAX_SUMMARY with no props.mode shows one IGST row for an inter-state bill, no CGST/SGST', () => {
     const result = renderTemplate(
       [{ type: 'TAX_SUMMARY', order: 1, props: {} }],
       INTER_STATE_TAX_INVOICE_SNAPSHOT,
@@ -548,18 +582,19 @@ describe('renderTemplate', () => {
       {
         width: 'full',
         type: 'TAX_SUMMARY',
-        kind: 'legacy_matrix',
+        kind: 'aggregate',
         isIntraState: false,
+        taxableValuePaise: '25000',
+        cgstPaise: '0',
+        sgstPaise: '0',
+        igstPaise: '1900', // 1000 + 900
+        totalTaxPaise: '1900',
         currency: 'INR',
-        rows: [
-          { taxRateBp: 500, taxableValuePaise: '20000', cgstPaise: '0', sgstPaise: '0', igstPaise: '1000' },
-          { taxRateBp: 1800, taxableValuePaise: '5000', cgstPaise: '0', sgstPaise: '0', igstPaise: '900' },
-        ],
       },
     ]);
   });
 
-  it('V-5: sums multiple lines at the same tax rate into one grouped row, via BigInt (no float)', () => {
+  it('Q-6: sums multiple lines at the same tax rate correctly under aggregate, via BigInt (no float)', () => {
     const snapshot: BillSnapshot = {
       ...TAX_INVOICE_SNAPSHOT,
       items: [
@@ -574,10 +609,14 @@ describe('renderTemplate', () => {
       {
         width: 'full',
         type: 'TAX_SUMMARY',
-        kind: 'legacy_matrix',
+        kind: 'aggregate',
         isIntraState: true,
+        taxableValuePaise: '30000',
+        cgstPaise: '750',
+        sgstPaise: '750',
+        igstPaise: '0',
+        totalTaxPaise: '1500',
         currency: 'INR',
-        rows: [{ taxRateBp: 500, taxableValuePaise: '30000', cgstPaise: '750', sgstPaise: '750', igstPaise: '0' }],
       },
     ]);
   });
@@ -830,14 +869,6 @@ describe('renderTemplate', () => {
     expect(block.totalTaxPaise).toBe((BigInt(block.cgstPaise) + BigInt(block.sgstPaise)).toString());
   });
 
-  it('RETAIL: TAX_SUMMARY without an explicit props.mode keeps the existing legacy_matrix behavior (TAX_COMPLIANT unaffected)', () => {
-    const result = renderTemplate([{ type: 'TAX_SUMMARY', order: 1, props: {} }], TAX_INVOICE_SNAPSHOT, SAMPLE_MERCHANT);
-
-    const block = result[0];
-    expect(block.type).toBe('TAX_SUMMARY');
-    if (block.type === 'TAX_SUMMARY') expect(block.kind).toBe('legacy_matrix');
-  });
-
   // ---- RETAIL: SAVINGS/LOYALTY — no data source yet, never fabricated ----
 
   it('RETAIL: SAVINGS has no data source yet — savingsPaise is always undefined', () => {
@@ -912,7 +943,7 @@ describe('renderTemplate', () => {
     ]);
   });
 
-  it('RESTAURANT: BILL_META renders billNumber from snapshot.invoiceNumber; date is always undefined (no data source yet)', () => {
+  it('RESTAURANT: BILL_META renders billNumber from snapshot.invoiceNumber; date is undefined when snapshot.invoiceDate is absent (Q-7: pre-existing bill)', () => {
     const result = renderTemplate([{ type: 'BILL_META', order: 1, props: {} }], TAX_INVOICE_SNAPSHOT, SAMPLE_MERCHANT);
 
     expect(result).toEqual([{ width: 'full', type: 'BILL_META', billNumber: 'INV-2026-0001', date: undefined }]);
@@ -923,6 +954,13 @@ describe('renderTemplate', () => {
     const result = renderTemplate([{ type: 'BILL_META', order: 1, props: {} }], snapshot, SAMPLE_MERCHANT);
 
     expect(result).toEqual([{ width: 'full', type: 'BILL_META', billNumber: undefined, date: undefined }]);
+  });
+
+  it('Q-7: BILL_META renders date from snapshot.invoiceDate when present', () => {
+    const snapshot: BillSnapshot = { ...TAX_INVOICE_SNAPSHOT, invoiceDate: '2026-09-16' };
+    const result = renderTemplate([{ type: 'BILL_META', order: 1, props: {} }], snapshot, SAMPLE_MERCHANT);
+
+    expect(result).toEqual([{ width: 'full', type: 'BILL_META', billNumber: 'INV-2026-0001', date: '2026-09-16' }]);
   });
 
   it('RESTAURANT: ITEMS config has no hsn field anywhere (not a column, not a secondaryField) and quantity is present for the name-fold', () => {

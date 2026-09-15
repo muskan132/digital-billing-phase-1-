@@ -185,6 +185,9 @@ export class BillsService {
       currency: dto.currency,
       amountPaise: result.totalPaise.toString(),
       invoiceNumber: dto.invoice_number,
+      // D-88 addendum: optional and additive — present only when the caller supplies
+      // it. Never fabricated, never derived from sale_at (a different fact).
+      ...(dto.invoice_date ? { invoiceDate: dto.invoice_date } : {}),
       placeOfSupply: dto.place_of_supply,
       merchantGstin: merchant.gstin,
       merchantState: merchant.state,

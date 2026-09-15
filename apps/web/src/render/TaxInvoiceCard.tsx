@@ -47,6 +47,12 @@ export function TaxInvoiceCard({ blocks }: { blocks: RenderedBlock[] }) {
                   <span>{merchantInfo.invoiceNumber}</span>
                 </div>
               )}
+              {isPresent(merchantInfo.invoiceDate) && (
+                <div className="tax-invoice-meta-row">
+                  <span>Invoice Date</span>
+                  <span>{merchantInfo.invoiceDate}</span>
+                </div>
+              )}
               {isPresent(merchantInfo.placeOfSupply) && (
                 <div className="tax-invoice-meta-row">
                   <span>Place of Supply</span>
