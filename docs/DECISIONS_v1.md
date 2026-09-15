@@ -834,3 +834,115 @@ Both: `bill_id, created_at, bill_type, source, invoice_number, total_paise, curr
 **6 · Sequencing** (D-80 §2), implemented in `exportCsv` in this order: contact `422` (zero DB) → `parse*` filters (`400`) → `exportRows()` materialize → `rowCount = rows.length` → normalize filters to `ExportAuditFilters` (only keys the merchant sent, `{}` if none) → `await auditService.record(...)` → serialize → set `text/csv` + `Content-Disposition: attachment; filename="bills-export-<merchant-8>-<yyyymmdd>.csv"` → `res.send(csv)`. A serializer failure after step 5 → `500`, no file, orphan audit row (D-80 §3, accepted).
 
 **Web:** the browser cannot hit `:4000/portal/bills/export.csv` directly (httpOnly session cookie, cross-origin), so a Next GET proxy `app/portal/bills/export/route.ts` forwards the cookie and pipes the CSV + its headers back. Two `MERCHANT_ADMIN`-only "Download CSV" links (masked / full) on `/portal/bills`, carrying the current filters.
+
+### D-82 · Phase 6 is gated: the base is cleaned before any feature work
+
+**Decision:** Phase 6 runs in four stages — A clean the base, B analytics, C surveys and ratings, D response analytics — and a stage does not begin until the previous one is verified. Stage A closes all eight defects deferred across Phases 1–5.
+
+**Reason:** each individual deferral was correct; the accumulation is not. Eight items now stand between "five phases complete and verified" and "usable by a merchant," and they have been re-recorded three times without being fixed, which is a slower form of forgetting them. The gate is specific rather than hygienic: Stage C adds the first unauthenticated write endpoint in the system, and a new public attack surface must land on a base with no known defects — particularly not on top of a logger that leaks PII through Prisma's own exception messages.
+
+**Consequence:** Phase 6 is the largest phase so far. The stage boundaries are the honest checkpoints; the phase is not done until D is.
+
+### D-83 · PG-path sale time: strict yyyyMMddHHmmss, interpreted in IST through one constant, always recomputable
+
+**Decision:** `Order.saleAt` is populated on the callback path by parsing `paymentDateTime`. The parse accepts **exactly** 14 digits in `yyyyMMddHHmmss` and rejects everything else; the value is interpreted in a single named `IST_ZONE` constant. `Order.paymentDateTime` keeps the raw string permanently and is never modified. The backfill is idempotent and recomputes purely from the raw string. No column is added — `Order.saleAt` already exists and is nullable.
+
+**Reason:** the format is documented only in a schema comment and `DATA_MODEL_v1`; no vendor specification exists anywhere in the repository, and every fixture in the codebase uses one identical value. Worse, our own `demo.service.ts` generates the field from `toISOString()` — UTC — so validating a parser against our fixtures would validate it against our own guess. IST was confirmed separately; the constant exists so that a wrong answer is a one-line correction rather than an archaeology exercise.
+
+A permissive parser is worse than a narrow one here: a coerced date is indistinguishable from a correct one until someone audits a chart. Strict rejection surfaces deviant values at backfill time, which is the cheapest moment to find them.
+
+**Because `saleAt` is derived and the raw string is retained, nothing is lost by being wrong** — which is what makes shipping ahead of a vendor specification acceptable rather than reckless.
+
+**Open, not blocking:** the DTO also declares `TransmissionDateTime`, which is accepted and stored nowhere. It may be the more honest event time. Unasked of JioPay; unused here.
+
+### D-84 · An unparseable sale time is null and visible, never silently dropped
+
+**Decision:** when `paymentDateTime` does not parse, `Order.saleAt` stays null. Such bills are excluded from every sale-time series and reported as an explicit `unattributedCount` alongside the charts, displayed in the UI rather than hidden.
+
+**Reason:** the failure mode being avoided is a merchant reconciling their own revenue against a chart that is quietly missing rows. An excluded-and-counted bill is a visible discrepancy the merchant can ask about; an excluded-and-uncounted bill is a wrong number that looks right. Falling back to `createdAt` was rejected for the same reason D-61 rejected silent template substitution: it produces a plausible answer to a question that was not asked.
+
+### D-85 · Analytics reads `Bill` for money, groups every aggregate by currency, and buckets in fixed IST
+
+**Decision:** money aggregates read `Bill.totalPaise` and the tax columns, joined to `Order` for `source` and `saleAt`. **Every** aggregate is grouped by currency with no exception. Time buckets are computed in a fixed IST constant. Averages are computed in `BigInt` paise with a single half-up rounding at the presentation edge, and are labelled derived rather than authoritative.
+
+**Reason — `Bill`, not `Order`:** `Order.amountPaise` is nullable by D-15 (non-success orders, and success callbacks with unparseable amounts). A `Bill` exists only where an amount parsed, so reading `Bill` removes the null case structurally instead of filtering it away in every query.
+
+**Reason — currency always:** `Order.currency` is caller-supplied and validated ISO-4217 on the direct path (BR-4), so mixed currencies are possible today. Summing across them produces a number with no meaning, and the bug would be invisible until an international transaction appeared. Grouping unconditionally means the correct behaviour is the default rather than something a future query must remember.
+
+**Reason — fixed IST:** every merchant is Indian and JioPay is India-only. A `Merchant.timezone` column is a migration that buys nothing until that changes; confining the constant to one module makes adding one a contained change.
+
+### D-86 · Bill-sent time is derived from `Broadcast`, never stored
+
+**Decision:** "when was this bill sent" is computed as the **first successful** `Broadcast.sentAt` for the bill's order. No field is added to `Bill`.
+
+**Reason:** R-2's resend means one bill can have several broadcasts, so a stored field would need a rule about which send wins and a write path to maintain it — a second representation of a fact `Broadcast` already holds (the D-39 pattern). First-successful is chosen over latest because the question is "when did the customer first get it", and a resend is remediation of a delivery that failed, not a new delivery event.
+
+### D-87 · Renderer bug fixes legitimately change how issued bills look; §7 freezes content, not pixels
+
+**Decision:** Q-5 and Q-6 change how already-issued `TAX_COMPLIANT` bills render, and this is correct, not a violation. `TEMPLATE_SYSTEM_v2` §7 and `Bill.layoutSnapshot` guarantee that the **block list and its data bindings** are frozen at issue. They do not, and never did, guarantee the renderer's visual output is frozen.
+
+**Reason:** the alternative is absurd on inspection — it would mean a rendering bug, once shipped, could never be fixed for any bill that had already been issued, and every fix would need a versioned renderer keyed to issue date. What §7 protects is that editing a *template* cannot change what an issued bill **says**. A `TAX_COMPLIANT` bill showing CGST and SGST as separate rows instead of a forbidden column matrix says the same thing, correctly.
+
+**Boundary, stated so it is not stretched:** this permits fixes that change presentation of unchanged data. It does not permit a renderer change that alters which data a block reads, adds a field, or changes a computed figure — those are content changes and belong behind a snapshot version.
+
+### D-88 · `invoiceDate` extends the D-28 whitelist by exactly one field, for new bills only
+
+**Decision:** `invoiceDate` is added to `Bill.snapshot` for `TAX_INVOICE` bills at creation, sourced from the direct payload. Existing bills are **not** backfilled; `BILL_META` and `TAX_COMPLIANT` render the date when present and stay silent when absent — the behaviour they already have. The D-28 key-set test is updated to expect exactly one new field.
+
+**Reason:** the whitelist is the PII boundary (D-17), so extending it is Tier-1 regardless of how innocuous the field is, and the extension is stated as exactly one field so the test remains a real constraint rather than a formality. `invoiceDate` is a merchant-supplied document fact carrying no customer information — checked individually, per D-28's own discipline, not assumed from its name.
+
+**No backfill:** existing `snapshot` values are immutable by §7. A bill issued without a date genuinely was issued without one, and fabricating one now would be inventing a fact — the same reasoning that kept the field out until a real source existed.
+
+**Consequence:** for a period, some tax invoices show a date and older ones do not. That is an honest representation of history.
+
+### D-89 · Survey and rating definitions are snapshotted into `layoutSnapshot` at issue
+
+**Decision:** the `SURVEY` and `RATING` blocks carry an id in the template. At bill creation, **both** write paths resolve that id and freeze the full definition — questions, types, order, appearance — into `Bill.layoutSnapshot`. The renderer continues to read only the snapshot and performs no database access for bill content.
+
+**Reason:** the renderer reading only `layoutSnapshot` is what makes §7's guarantee true rather than aspirational. A live `surveyId` lookup would be the first time an issued bill's content could change after issue, and it would require giving the renderer database access it has never had. The current `SURVEY` block already freezes its props this way; this preserves that property while making the content merchant-managed.
+
+**Rejected:** live resolution at render time. It buys a merchant the ability to fix a typo on already-issued bills, at the cost of the one invariant that has held since Phase 3.
+
+**Consequence:** a response answers the questions frozen on **its** bill, so response analytics must group by question version (N-4). A deleted survey does not break an issued bill — the snapshot is self-sufficient.
+
+### D-90 · Survey anonymity is chosen at creation and is immutable; anonymous responses store a hash, never a bill reference
+
+**Decision:** each survey is anonymous or attributable, chosen at creation, and **no route accepts a change to it** afterwards. An attributable response stores `billId`. An anonymous response stores only a one-way `dedupeHash` derived from the bill identifier and a per-survey salt, and **never** `billId`. A check constraint enforces that exactly one of the two is present.
+
+**Reason:** anonymity cannot be applied retroactively. Once responses carry a bill link, removing it does not un-know what was already stored or already visible; and flipping the setting mid-life produces one dataset with two meanings and no way to tell which rows mean which. Fixing it at creation is the only honest form.
+
+The hash exists because one-response-per-bill still has to be enforced for anonymous surveys. Storing a one-way digest allows the duplicate check without storing the link — the property being protected is that the table cannot be read backwards to a customer, not that duplicates are tolerated.
+
+**Enforced at the database:** the constraint is a check, not application logic, for the same reason D-63's uniqueness is an index — an invariant this consequential should be impossible to violate, not merely discouraged.
+
+### D-91 · Rating is a separate module from Survey; the public capture envelope is shared
+
+**Decision:** `Rating` is its own entity with its own editor, its own block, its own response table and its own analytics, usable with no survey present. Surveys and ratings **share one public capture controller** and one set of anti-abuse defences.
+
+**Reason for separation:** a merchant wanting a one-tap star rating should not have to construct a survey, and the two have genuinely different editing and reporting shapes.
+
+**Cost, recorded honestly:** a rating is structurally a single-question survey, so this is two implementations of one idea — two entities, two response tables, two analytics pipelines, and two places any future change to response handling must be made. Modelling rating as a single-question survey underneath, surfaced as a simpler control, was considered and set aside in favour of the cleaner merchant-facing separation. If the two pipelines start drifting, this entry is where that cost was accepted.
+
+**Reason the capture path is shared:** the unauthenticated endpoint is the security-critical surface. Duplicating rate limiting, replay defence and enumeration-resistance would mean two places to get them right and two places to get them wrong. Separating the domain does not require separating the defences.
+
+**Consequence:** rating analytics and survey rating-questions are counted separately and never merged — they are different instruments that happen to produce similar numbers.
+
+### D-92 · The public response endpoint's security envelope
+
+**Decision:** `POST /r/:identifier/responses` is unauthenticated and keyed on the bill's existing unguessable link identifier — the same capability the public bill page already relies on. It enforces: one response per bill per instrument (`409` on a second, zero writes); a rate limit per identifier and per source address (`429`, zero writes); `404` for an unknown identifier with a body **identical** to the public bill page's, so the endpoint reveals nothing the page does not; strict body validation rejecting unknown fields rather than storing them; and no read or write of any `Order`, `Bill` or contact field.
+
+**Reason:** this is the first unauthenticated write in the system, and every property above closes a way it could be turned into something else — an enumeration oracle, a spam sink, a stuffing target, or a path into customer data. The link identifier is used as the capability because the system already treats it as one; inventing a second secret would create a second thing to leak.
+
+**`404` matching the bill page exactly** matters more than it looks: a distinguishable response here would let an attacker enumerate valid bill identifiers against an endpoint with no session and no rate history, which is materially easier than probing the page.
+
+**Accepted limitation:** the rate limit is in-process, so it does not survive a restart or span instances. Single-instance local deployment makes that adequate today; a distributed limiter is the upgrade path and is named here so it is not rediscovered.
+
+### D-93 · Free text is stored verbatim, rendered inert, length-capped, and not moderated in v6
+
+**Decision:** free-text responses are stored exactly as submitted, length-capped at submission, escaped at every render, never interpreted as markup or formulas, and never aggregated — they are listed. No moderation queue, no filtering, no export.
+
+**Reason:** this is the first customer-written content this system displays to a merchant, so the rendering path is where it can hurt. Escaping at render rather than sanitising at write preserves what the customer actually said — the merchant's reason for asking — while making it inert everywhere it is shown. The same formula-injection guard D-81 applies to CSV fields applies anywhere free text reaches a spreadsheet.
+
+**Not aggregated** because averaging prose is meaningless; the analytics surface lists responses and counts them.
+
+**Deferred, not designed:** moderation, and export of responses. Export in particular is a new egress surface with its own D-70/D-71 questions — the audit machinery exists, the decision does not.

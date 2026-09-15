@@ -8,6 +8,23 @@ import { maskEmail, maskMobile } from '../common/mask.util';
 
 const SUCCESS_RESPONSE_CODE = '0000';
 
+// Q-1 (D-8/D-9): the nested Bill/Link/Broadcast creates below prevent Prisma
+// from compiling this upsert to a native ON CONFLICT, so two near-simultaneous
+// callbacks for the same txnId can both attempt the Order insert; the loser
+// gets P2002 on Order.txnId. Same narrow-match discipline as
+// templates.service's isTemplateNameConflict / portal-deliveries.service's
+// isPendingBroadcastConflict — match only Order's txnId unique constraint,
+// since txnId is the sole idempotency key (D-9) and nothing else should be
+// silently swallowed here (e.g. a genuine Link.identifier collision).
+function isTxnIdConflict(err: unknown): boolean {
+  if (!(err instanceof Prisma.PrismaClientKnownRequestError) || err.code !== 'P2002') {
+    return false;
+  }
+  const target = err.meta?.target;
+  const fields = Array.isArray(target) ? target.map(String) : typeof target === 'string' ? [target] : [];
+  return fields.length === 1 && fields[0] === 'txnId';
+}
+
 @Injectable()
 export class CallbacksService {
   private readonly logger = new Logger(CallbacksService.name);
@@ -96,69 +113,80 @@ export class CallbacksService {
       );
     }
 
-    await this.prisma.order.upsert({
-      where: { txnId },
-      create: {
-        ...orderFields,
-        status: 'SUCCESS',
-        amountPaise,
-        bill: {
-          create: {
-            merchantId: merchant.id,
-            billType: merchant.defaultReceiptTemplate.billType,
-            templateId: merchant.defaultReceiptTemplate.id,
-            totalPaise: amountPaise,
-            currency: 'INR',
-            snapshot: {
-              merchantName: merchant.name,
-              amountPaise: amountPaise.toString(),
-              currency: 'INR',
-              paymentMode: callback.paymentMode ?? null,
-              paymentDateTime: callback.paymentDateTime ?? null,
-              receiptNumber: callback.txnID ?? null,
-              merchantTxnNo: callback.merchantTxnNo ?? null,
-              cardNetwork: callback.cardNetwork ?? null,
-              // D-17: paymentInstId is only known to be pre-masked by JioPay for card
-              // transactions (e.g. "4XXX XXXX XXXX 1111") — for other payment modes
-              // (e.g. UPI) this field may carry the customer's VPA, which is personal
-              // data. Only include it when cardNetwork confirms a card transaction;
-              // otherwise store null rather than risk leaking identifying data to the
-              // public bill-view page.
-              paymentInstId: callback.cardNetwork ? (callback.paymentInstId ?? null) : null,
-              respDescription: callback.respDescription ?? null,
-            },
-            // TEMPLATE_SYSTEM_v2 §7: freeze the resolved template's render spec onto
-            // the bill at creation. The renderer must read only this, never the live
-            // template — editing a template must never change how an issued bill renders.
-            layoutSnapshot: {
-              schemaVersion: 1,
-              skeleton: merchant.defaultReceiptTemplate.skeleton,
-              blocks: merchant.defaultReceiptTemplate.layoutSchema as Prisma.InputJsonValue,
+    try {
+      await this.prisma.order.upsert({
+        where: { txnId },
+        create: {
+          ...orderFields,
+          status: 'SUCCESS',
+          amountPaise,
+          bill: {
+            create: {
+              merchantId: merchant.id,
+              billType: merchant.defaultReceiptTemplate.billType,
               templateId: merchant.defaultReceiptTemplate.id,
-              templateVersion: merchant.defaultReceiptTemplate.version,
+              totalPaise: amountPaise,
+              currency: 'INR',
+              snapshot: {
+                merchantName: merchant.name,
+                amountPaise: amountPaise.toString(),
+                currency: 'INR',
+                paymentMode: callback.paymentMode ?? null,
+                paymentDateTime: callback.paymentDateTime ?? null,
+                receiptNumber: callback.txnID ?? null,
+                merchantTxnNo: callback.merchantTxnNo ?? null,
+                cardNetwork: callback.cardNetwork ?? null,
+                // D-17: paymentInstId is only known to be pre-masked by JioPay for card
+                // transactions (e.g. "4XXX XXXX XXXX 1111") — for other payment modes
+                // (e.g. UPI) this field may carry the customer's VPA, which is personal
+                // data. Only include it when cardNetwork confirms a card transaction;
+                // otherwise store null rather than risk leaking identifying data to the
+                // public bill-view page.
+                paymentInstId: callback.cardNetwork ? (callback.paymentInstId ?? null) : null,
+                respDescription: callback.respDescription ?? null,
+              },
+              // TEMPLATE_SYSTEM_v2 §7: freeze the resolved template's render spec onto
+              // the bill at creation. The renderer must read only this, never the live
+              // template — editing a template must never change how an issued bill renders.
+              layoutSnapshot: {
+                schemaVersion: 1,
+                skeleton: merchant.defaultReceiptTemplate.skeleton,
+                blocks: merchant.defaultReceiptTemplate.layoutSchema as Prisma.InputJsonValue,
+                templateId: merchant.defaultReceiptTemplate.id,
+                templateVersion: merchant.defaultReceiptTemplate.version,
+              },
             },
           },
-        },
-        link: {
-          create: {
-            identifier: generateIdentifier(),
+          link: {
+            create: {
+              identifier: generateIdentifier(),
+            },
           },
+          ...(recipient
+            ? {
+                broadcasts: {
+                  create: [
+                    {
+                      channel: merchant.defaultChannel,
+                      recipient,
+                      status: 'PENDING',
+                    },
+                  ],
+                },
+              }
+            : {}),
         },
-        ...(recipient
-          ? {
-              broadcasts: {
-                create: [
-                  {
-                    channel: merchant.defaultChannel,
-                    recipient,
-                    status: 'PENDING',
-                  },
-                ],
-              },
-            }
-          : {}),
-      },
-      update: {},
-    });
+        update: {},
+      });
+    } catch (err) {
+      if (!isTxnIdConflict(err)) {
+        throw err;
+      }
+      // D-5: a redelivered callback acks 200 with no-op; the winner already
+      // wrote exactly one Order/Bill/Link/Broadcast for this txnId, and the
+      // controller's response carries no row-derived data, so simply
+      // returning here is byte-identical to the winning response.
+      this.logger.log(`txnId=${txnId} — concurrent duplicate callback, upsert lost the race (P2002 on txnId), no-op`);
+    }
   }
 }
