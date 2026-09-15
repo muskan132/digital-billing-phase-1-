@@ -744,21 +744,26 @@ describe('F-4: hard delete (real DB)', () => {
     const v2 = await service.save(v1.id, F4_BODY, merchant.merchantId);
     const v3 = await service.save(v2.id, F4_BODY, merchant.merchantId);
 
+    // Scoped to this test's own scratch merchant — a global unscoped count
+    // races against any other integration suite creating/deleting rows
+    // concurrently under Jest's parallel workers (all sharing one real
+    // Postgres instance), which is exactly what deleteLineage does NOT do,
+    // so scoping changes nothing about what this test actually verifies.
     const before = {
-      bill: await prisma.bill.count(),
-      order: await prisma.order.count(),
-      link: await prisma.link.count(),
-      broadcast: await prisma.broadcast.count(),
+      bill: await prisma.bill.count({ where: { merchantId: merchant.merchantId } }),
+      order: await prisma.order.count({ where: { merchantId: merchant.merchantId } }),
+      link: await prisma.link.count({ where: { order: { merchantId: merchant.merchantId } } }),
+      broadcast: await prisma.broadcast.count({ where: { order: { merchantId: merchant.merchantId } } }),
     };
 
     const result = await service.deleteLineage(v2.id, merchant.merchantId); // via a NON-head id
     expect(result).toEqual({ deletedCount: 3 });
     expect(await prisma.template.count({ where: { id: { in: [v1.id, v2.id, v3.id] } } })).toBe(0);
 
-    expect(await prisma.bill.count()).toBe(before.bill);
-    expect(await prisma.order.count()).toBe(before.order);
-    expect(await prisma.link.count()).toBe(before.link);
-    expect(await prisma.broadcast.count()).toBe(before.broadcast);
+    expect(await prisma.bill.count({ where: { merchantId: merchant.merchantId } })).toBe(before.bill);
+    expect(await prisma.order.count({ where: { merchantId: merchant.merchantId } })).toBe(before.order);
+    expect(await prisma.link.count({ where: { order: { merchantId: merchant.merchantId } } })).toBe(before.link);
+    expect(await prisma.broadcast.count({ where: { order: { merchantId: merchant.merchantId } } })).toBe(before.broadcast);
   });
 
   it('refused when the HEAD has a bill — 422, zero rows', async () => {

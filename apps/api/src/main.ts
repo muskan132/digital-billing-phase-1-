@@ -1,6 +1,7 @@
-import { NestFactory } from '@nestjs/core';
+import { NestFactory, HttpAdapterHost } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { AppModule } from './app.module';
+import { PrismaPiiScrubFilter } from './common/prisma-pii.filter';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
@@ -11,6 +12,9 @@ async function bootstrap() {
   // replace each route's own auth (ApiKeyGuard/SecureHashGuard/DemoOnlyGuard).
   app.enableCors({ origin: 'http://localhost:3000' });
   app.useGlobalPipes(new ValidationPipe({ whitelist: false, forbidNonWhitelisted: false }));
+  // Q-2 (D-94): scrubs PII from Prisma errors before Nest's default logger
+  // sees them; the client-visible response is unchanged.
+  app.useGlobalFilters(new PrismaPiiScrubFilter(app.get(HttpAdapterHost).httpAdapter));
   await app.listen(4000);
 }
 bootstrap();
