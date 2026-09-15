@@ -118,6 +118,17 @@ export class BroadcastDrainerService {
               error: `${failure.reasonCode}: ${failure.message}`,
             },
           });
+          // Q-3: fires exactly once, the tick this row's attempts crosses into
+          // exhausted — every later tick's candidate query (`attempts: { lt:
+          // maxAttempts }`) excludes it, so this is one-shot by construction,
+          // no dedup needed. Names the broadcast and merchant, never the
+          // recipient (PII).
+          const newAttempts = row.attempts + 1;
+          if (newAttempts >= this.maxAttempts) {
+            this.logger.error(
+              `Broadcast ${row.id} exhausted MAX_BROADCAST_ATTEMPTS (${this.maxAttempts}) for merchantId=${row.order.merchantId} — no further retries`,
+            );
+          }
         } catch (updateErr) {
           this.logger.error(
             `Broadcast ${row.id} failed to send AND failed to record FAILED status: ${

@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import { BroadcastStatus, Channel } from '@prisma/client';
 import { BroadcastDrainerService } from './broadcast-drainer.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -15,7 +16,7 @@ function makeRow(overrides: Partial<Record<string, unknown>> = {}) {
     createdAt: new Date('2026-01-01T00:00:00Z'),
     updatedAt: new Date('2026-01-01T00:00:00Z'),
     sentAt: null,
-    order: { link: { identifier: 'demo-identifier' } },
+    order: { merchantId: 'merchant-1', link: { identifier: 'demo-identifier' } },
     ...overrides,
   };
 }
@@ -287,5 +288,71 @@ describe('BroadcastDrainerService', () => {
     await Promise.all([firstTick, secondTick]);
 
     expect(findMany).toHaveBeenCalledTimes(1);
+  });
+
+  // Q-3: operator signal for dead broadcasts.
+  describe('Q-3: operator signal on exhaustion', () => {
+    it('fires exactly once, on the tick attempts crosses into exhausted (maxAttempts=5, attempts 4→5) — names the broadcast and merchant, never the recipient', async () => {
+      const errorSpy = jest.spyOn(Logger.prototype, 'error');
+      errorSpy.mockClear();
+      const row = makeRow({ id: 'dead-1', attempts: 4, order: { merchantId: 'merchant-xyz', link: { identifier: 'demo-identifier' } } });
+      findMany.mockResolvedValue([row]);
+      sendBroadcast.mockResolvedValue({ sent: false, reasonCode: 'timeout', message: 'SMTP send failed for a***@example.com' });
+
+      await service.drain();
+
+      const exhaustionLogs = errorSpy.mock.calls.filter((call) => String(call[0]).includes('exhausted MAX_BROADCAST_ATTEMPTS'));
+      expect(exhaustionLogs).toHaveLength(1);
+      const [message] = exhaustionLogs[0];
+      expect(String(message)).toContain('dead-1');
+      expect(String(message)).toContain('merchant-xyz');
+      expect(String(message)).not.toContain('a@example.com'); // the recipient — PII, must never appear
+      expect(String(message)).not.toContain('example.com');
+
+      errorSpy.mockRestore();
+    });
+
+    it('does NOT fire when a FAILED row has not yet reached max attempts (attempts 2→3, below max 5)', async () => {
+      const errorSpy = jest.spyOn(Logger.prototype, 'error');
+      errorSpy.mockClear();
+      const row = makeRow({ id: 'not-dead-yet', attempts: 2 });
+      findMany.mockResolvedValue([row]);
+      sendBroadcast.mockResolvedValue({ sent: false, reasonCode: 'timeout', message: 'SMTP send failed' });
+
+      await service.drain();
+
+      const exhaustionLogs = errorSpy.mock.calls.filter((call) => String(call[0]).includes('exhausted MAX_BROADCAST_ATTEMPTS'));
+      expect(exhaustionLogs).toHaveLength(0);
+
+      errorSpy.mockRestore();
+    });
+
+    it('does NOT fire on a successful send, even one that happens to be the row\'s last chance (no exhaustion — it sent)', async () => {
+      const errorSpy = jest.spyOn(Logger.prototype, 'error');
+      errorSpy.mockClear();
+      const row = makeRow({ id: 'saved-at-the-wire', attempts: 4 });
+      findMany.mockResolvedValue([row]);
+      sendBroadcast.mockResolvedValue({ sent: true });
+
+      await service.drain();
+
+      const exhaustionLogs = errorSpy.mock.calls.filter((call) => String(call[0]).includes('exhausted MAX_BROADCAST_ATTEMPTS'));
+      expect(exhaustionLogs).toHaveLength(0);
+
+      errorSpy.mockRestore();
+    });
+
+    // Not-once-per-tick, by construction: the candidate query's own WHERE
+    // clause (`attempts: { lt: maxAttempts }`, asserted above) permanently
+    // excludes an already-exhausted row from every future tick — there is
+    // nothing for the drainer to re-process, so no dedup logic is needed.
+    it('an already-exhausted row is structurally excluded from the candidate query on the next tick (attempts:{lt:maxAttempts}) — one-shot by construction', async () => {
+      findMany.mockResolvedValue([]);
+      await service.drain();
+
+      const [args] = findMany.mock.calls[0] as [{ where: { OR: unknown[] } }];
+      expect(args.where.OR).toContainEqual({ status: BroadcastStatus.FAILED, attempts: { lt: 5 } });
+      // an exhausted row (attempts === 5) fails `lt: 5` — Prisma would never return it.
+    });
   });
 });
