@@ -9,7 +9,8 @@ const SHARED_TAX_TEMPLATE = {
   merchantId: null,
   billType: 'TAX_INVOICE',
   skeleton: 'TAX_COMPLIANT',
-  layoutSchema: [{ type: 'HEADER', order: 1, props: {} }],
+  // D-96: the real shape since T-5's migration — a v2 envelope, not a bare array.
+  layoutSchema: { schemaVersion: 2, skeleton: 'TAX_COMPLIANT', blocks: [{ type: 'HEADER', order: 1, props: {} }] },
   version: 1,
   archivedAt: null,
   createdAt: new Date('2026-01-01T00:00:00Z'),
@@ -133,10 +134,14 @@ describe('BillsService.createBill', () => {
     await service.createBill(dto, MERCHANT_A.id);
 
     const call = orderUpsert.mock.calls[0][0];
-    expect(call.create.bill.create.layoutSnapshot).toEqual({
+    const layoutSnapshot = call.create.bill.create.layoutSnapshot;
+    // D-96 regression check: .blocks must be the plain array extracted from
+    // the v2 envelope, never the whole envelope object.
+    expect(Array.isArray(layoutSnapshot.blocks)).toBe(true);
+    expect(layoutSnapshot).toEqual({
       schemaVersion: 1,
       skeleton: SHARED_TAX_TEMPLATE.skeleton,
-      blocks: SHARED_TAX_TEMPLATE.layoutSchema,
+      blocks: SHARED_TAX_TEMPLATE.layoutSchema.blocks,
       templateId: SHARED_TAX_TEMPLATE.id,
       templateVersion: SHARED_TAX_TEMPLATE.version,
     });

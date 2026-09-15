@@ -1,5 +1,6 @@
 import { ForbiddenException, Injectable, Logger, UnprocessableEntityException } from '@nestjs/common';
 import { Prisma, Template } from '@prisma/client';
+import { LayoutSchemaV2 } from '@digital-billing/block-manifest';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateBillDto } from './dto/create-bill.dto';
 import { InvoiceLineInput, InvoiceResult } from './invoice-calc';
@@ -220,7 +221,9 @@ export class BillsService {
     const layoutSnapshot = {
       schemaVersion: 1,
       skeleton: template.skeleton,
-      blocks: template.layoutSchema as Prisma.InputJsonValue,
+      // D-96: Template.layoutSchema is the v2 envelope since T-5's migration —
+      // extract .blocks (the plain array), never embed the whole envelope.
+      blocks: (template.layoutSchema as unknown as LayoutSchemaV2).blocks as unknown as Prisma.InputJsonValue,
       templateId: template.id,
       templateVersion: template.version,
     };

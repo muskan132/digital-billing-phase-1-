@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Channel, Prisma } from '@prisma/client';
+import { LayoutSchemaV2 } from '@digital-billing/block-manifest';
 import { PrismaService } from '../prisma/prisma.service';
 import { JioPayCallbackDto } from './jiopay-callback.dto';
 import { rupeesToPaise } from '../common/money.util';
@@ -117,7 +118,9 @@ export class CallbacksService {
     const layoutSnapshot = {
       schemaVersion: 1,
       skeleton: merchant.defaultReceiptTemplate.skeleton,
-      blocks: merchant.defaultReceiptTemplate.layoutSchema as Prisma.InputJsonValue,
+      // D-96: Template.layoutSchema is the v2 envelope since T-5's migration —
+      // extract .blocks (the plain array), never embed the whole envelope.
+      blocks: (merchant.defaultReceiptTemplate.layoutSchema as unknown as LayoutSchemaV2).blocks as unknown as Prisma.InputJsonValue,
       templateId: merchant.defaultReceiptTemplate.id,
       templateVersion: merchant.defaultReceiptTemplate.version,
     };

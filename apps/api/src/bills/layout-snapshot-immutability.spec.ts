@@ -51,7 +51,10 @@ const TEMPLATE_AT_ISSUE_TIME = {
   merchantId: null,
   billType: 'TAX_INVOICE',
   skeleton: 'TAX_COMPLIANT',
-  layoutSchema: ORIGINAL_BLOCKS,
+  // D-96: the real shape since T-5's migration — a v2 envelope, not a bare
+  // array. The write path extracts .blocks; ORIGINAL_BLOCKS below is what
+  // must land in the frozen layoutSnapshot.
+  layoutSchema: { schemaVersion: 2, skeleton: 'TAX_COMPLIANT', blocks: ORIGINAL_BLOCKS },
   version: 1,
   createdAt: new Date('2026-01-01T00:00:00Z'),
 };

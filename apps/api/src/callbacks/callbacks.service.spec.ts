@@ -19,7 +19,9 @@ describe('CallbacksService.persist — Bill.snapshot whitelist', () => {
             id: 'template_1',
             billType: 'RECEIPT',
             skeleton: 'MINIMALIST',
-            layoutSchema: [{ type: 'HEADER', order: 1, props: {} }],
+            // D-96: the real shape since T-5's migration — a v2 envelope, not
+            // a bare array.
+            layoutSchema: { schemaVersion: 2, skeleton: 'MINIMALIST', blocks: [{ type: 'HEADER', order: 1, props: {} }] },
             version: 1,
           },
         }),
@@ -70,7 +72,10 @@ describe('CallbacksService.persist — Bill.snapshot whitelist', () => {
       id: 'template_1',
       billType: 'RECEIPT',
       skeleton: 'MINIMALIST',
-      layoutSchema: [{ type: 'HEADER', order: 1, props: {} }],
+      // D-96: the real shape since T-5's migration — a v2 envelope, not a
+      // bare array. The BLOCKS constant below is what should end up in
+      // layoutSnapshot.blocks — the extracted array, not the whole envelope.
+      layoutSchema: { schemaVersion: 2, skeleton: 'MINIMALIST', blocks: [{ type: 'HEADER', order: 1, props: {} }] },
       version: 1,
     };
     const prisma = {
@@ -102,10 +107,13 @@ describe('CallbacksService.persist — Bill.snapshot whitelist', () => {
     await service.persist(callback, { raw: true });
 
     const layoutSnapshot = upsert.mock.calls[0][0].create.bill.create.layoutSnapshot;
+    // D-96 regression check: .blocks must be the plain array extracted from
+    // the v2 envelope, never the whole envelope object.
+    expect(Array.isArray(layoutSnapshot.blocks)).toBe(true);
     expect(layoutSnapshot).toEqual({
       schemaVersion: 1,
       skeleton: defaultReceiptTemplate.skeleton,
-      blocks: defaultReceiptTemplate.layoutSchema,
+      blocks: defaultReceiptTemplate.layoutSchema.blocks,
       templateId: defaultReceiptTemplate.id,
       templateVersion: defaultReceiptTemplate.version,
     });
@@ -126,7 +134,7 @@ describe('CallbacksService.persist — Bill.snapshot whitelist', () => {
             id: 'template_1',
             billType: 'RECEIPT',
             skeleton: 'MINIMALIST',
-            layoutSchema: [{ type: 'HEADER', order: 1, props: {} }],
+            layoutSchema: { schemaVersion: 2, skeleton: 'MINIMALIST', blocks: [{ type: 'HEADER', order: 1, props: {} }] },
             version: 1,
           },
         }),
