@@ -164,3 +164,107 @@ describe('CallbacksService.persist — Bill.snapshot whitelist', () => {
     expect(snapshot.paymentInstId).toBeNull();
   });
 });
+
+// N-1 / D-83: Order.saleAt is derived from paymentDateTime via the single
+// orderFields object spread into every Order.upsert create branch below.
+describe('CallbacksService.persist — Order.saleAt (N-1 / D-83)', () => {
+  function makePrisma(upsert: jest.Mock, defaultReceiptTemplate: unknown = {
+    id: 'template_1',
+    billType: 'RECEIPT',
+    skeleton: 'MINIMALIST',
+    layoutSchema: { schemaVersion: 2, skeleton: 'MINIMALIST', blocks: [{ type: 'HEADER', order: 1, props: {} }] },
+    version: 1,
+  }) {
+    return {
+      merchant: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'merchant_1',
+          name: 'Test Merchant',
+          defaultChannel: 'EMAIL',
+          defaultReceiptTemplate,
+        }),
+      },
+      order: { upsert },
+    } as unknown as PrismaService;
+  }
+
+  it('a full-SUCCESS callback sets Order.saleAt from a valid paymentDateTime, paymentDateTime itself untouched', async () => {
+    const upsert = jest.fn().mockResolvedValue(undefined);
+    const service = new CallbacksService(makePrisma(upsert));
+
+    const callback: JioPayCallbackDto = {
+      txnID: 'txn_saleat_1',
+      merchantId: 'JP2000000007',
+      responseCode: '0000',
+      amount: '1.00',
+      merchantTxnNo: 'mtxn_saleat_1',
+      paymentID: 'pay_saleat_1',
+      paymentMode: 'UPI',
+      paymentDateTime: '20260916140000',
+      customerEmailID: 'customer@example.com',
+    };
+
+    await service.persist(callback, { raw: true });
+
+    const create = upsert.mock.calls[0][0].create;
+    expect(create.paymentDateTime).toBe('20260916140000');
+    expect(create.saleAt).toEqual(new Date('2026-09-16T08:30:00.000Z'));
+  });
+
+  it('an unparseable paymentDateTime yields Order.saleAt = null on the full-SUCCESS branch, not a coerced date', async () => {
+    const upsert = jest.fn().mockResolvedValue(undefined);
+    const service = new CallbacksService(makePrisma(upsert));
+
+    const callback: JioPayCallbackDto = {
+      txnID: 'txn_saleat_2',
+      merchantId: 'JP2000000007',
+      responseCode: '0000',
+      amount: '1.00',
+      merchantTxnNo: 'mtxn_saleat_2',
+      paymentID: 'pay_saleat_2',
+      paymentMode: 'UPI',
+      paymentDateTime: 'not-a-date',
+      customerEmailID: 'customer@example.com',
+    };
+
+    await service.persist(callback, { raw: true });
+
+    expect(upsert.mock.calls[0][0].create.saleAt).toBeNull();
+  });
+
+  it('the NON_SUCCESS branch also sets Order.saleAt (orderFields is shared across every create branch)', async () => {
+    const upsert = jest.fn().mockResolvedValue(undefined);
+    const service = new CallbacksService(makePrisma(upsert));
+
+    const callback: JioPayCallbackDto = {
+      txnID: 'txn_saleat_3',
+      merchantId: 'JP2000000007',
+      responseCode: '1111', // non-success
+      paymentDateTime: '20260916140000',
+    };
+
+    await service.persist(callback, { raw: true });
+
+    expect(upsert.mock.calls[0][0].create.status).toBe('NON_SUCCESS');
+    expect(upsert.mock.calls[0][0].create.saleAt).toEqual(new Date('2026-09-16T08:30:00.000Z'));
+  });
+
+  it('the SUCCESS-with-unparseable-amount branch also sets Order.saleAt', async () => {
+    const upsert = jest.fn().mockResolvedValue(undefined);
+    const service = new CallbacksService(makePrisma(upsert));
+
+    const callback: JioPayCallbackDto = {
+      txnID: 'txn_saleat_4',
+      merchantId: 'JP2000000007',
+      responseCode: '0000',
+      amount: 'not-a-rupee-amount',
+      paymentDateTime: '20260916140000',
+    };
+
+    await service.persist(callback, { raw: true });
+
+    expect(upsert.mock.calls[0][0].create.status).toBe('SUCCESS');
+    expect(upsert.mock.calls[0][0].create.amountPaise).toBeNull();
+    expect(upsert.mock.calls[0][0].create.saleAt).toEqual(new Date('2026-09-16T08:30:00.000Z'));
+  });
+});

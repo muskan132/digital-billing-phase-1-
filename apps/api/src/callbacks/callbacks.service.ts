@@ -7,6 +7,7 @@ import { rupeesToPaise } from '../common/money.util';
 import { generateIdentifier } from '../common/link-id.util';
 import { maskEmail, maskMobile } from '../common/mask.util';
 import { hashSnapshot } from '../common/layout-snapshot-hash.util';
+import { parseSaleAt } from '../common/sale-time.util';
 
 const SUCCESS_RESPONSE_CODE = '0000';
 
@@ -64,6 +65,10 @@ export class CallbacksService {
       responseCode: callback.responseCode ?? '',
       paymentMode: callback.paymentMode,
       paymentDateTime: callback.paymentDateTime,
+      // D-83: derived from paymentDateTime, never the reverse — paymentDateTime
+      // itself is never modified. Single call site, applies uniformly across every
+      // Order.upsert create branch below (NON_SUCCESS, bad-amount, full SUCCESS).
+      saleAt: parseSaleAt(callback.paymentDateTime),
       customerMobile_pii: callback.customerMobileNo,
       customerEmail_pii: callback.customerEmailID,
       rawCallback: rawBody as Prisma.InputJsonValue,

@@ -855,6 +855,11 @@ A permissive parser is worse than a narrow one here: a coerced date is indisting
 
 **Open, not blocking:** the DTO also declares `TransmissionDateTime`, which is accepted and stored nowhere. It may be the more honest event time. Unasked of JioPay; unused here.
 
+**Addendum:** two implementation specifics this decision left open, both forced by its own "idempotent" and "never a coerced date" language rather than free choices:
+
+- **Backfill recompute semantics:** the backfill recomputes `saleAt` from `paymentDateTime` for **every** row with a non-null `paymentDateTime`, on **every** run — never gated on `saleAt IS NULL`. Q-4's backfill (`layoutSnapshotHash`) skips already-populated rows; that pattern does not apply here. A skip-if-populated backfill would make "change `IST_ZONE`, re-run, get a uniformly shifted result" unsatisfiable after the first run, since a second run would find nothing left to touch. `paymentDateTime` itself is still never modified, so this remains idempotent in the sense that matters: same input, same output, every time.
+- **Calendar-validity round-trip check:** the 14-digit/`yyyyMMddHHmmss` format check alone is not sufficient — a calendrically-impossible but correctly-shaped string (e.g. `"20260231235959"`, Feb 31) must also yield `null`, not a silently-overflowed date. `Date.UTC()` normalizes overflow instead of rejecting it, which is exactly the coercion this decision's "a coerced date is indistinguishable from a correct one" reasoning already rejects — this addendum just names that the coercion risk exists via calendar overflow, not only via loose format-matching, and both are closed the same way: reject, return `null`.
+
 ### D-84 · An unparseable sale time is null and visible, never silently dropped
 
 **Decision:** when `paymentDateTime` does not parse, `Order.saleAt` stays null. Such bills are excluded from every sale-time series and reported as an explicit `unattributedCount` alongside the charts, displayed in the UI rather than hidden.
