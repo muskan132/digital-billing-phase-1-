@@ -1,35 +1,14 @@
 import { notFound } from 'next/navigation';
-import { renderTemplate, RenderedBlock, LayoutBlock, BillSnapshot, BillMerchant } from '../../../src/render/template-renderer';
+import { BillSnapshot, BillMerchant } from '../../../src/render/template-renderer';
 import { BillBlocks } from '../../../src/render/BillBlocks';
 import { DownloadButton } from '../../../src/render/DownloadButton';
 import { ShareButton } from '../../../src/render/ShareButton';
+// S-12-fix: renderProductionBill/BillLayoutSnapshot live in render-production-bill.ts,
+// not here — Next's typed-route validator rejects any named export on a page file
+// beyond its own allowlist (default, metadata, ...) once .next/types is generated.
+import { renderProductionBill, BillLayoutSnapshot } from '../../../src/render/render-production-bill';
 
 const API_BASE_URL = process.env.API_BASE_URL ?? 'http://localhost:4000';
-
-// TEMPLATE_SYSTEM_v2 §7: the frozen render spec — the ONLY source of layout/skeleton
-// for rendering. Never read bill.template.layoutSchema via a live join here again;
-// that is the exact bug §7 exists to fix.
-export interface BillLayoutSnapshot {
-  schemaVersion: number;
-  skeleton: string;
-  blocks: LayoutBlock[];
-  templateId: string;
-  templateVersion: number;
-}
-
-// Exported so X-1 (render-parity.spec.ts) can call the SAME wiring this page
-// uses, instead of a spec-local reimplementation that could silently drift
-// from what actually ships here. Throws exactly as renderTemplate does (D-10,
-// unknown block type) — the caller (BillPage below) is responsible for
-// catching that, same as before this was extracted.
-export function renderProductionBill(
-  layoutSnapshot: BillLayoutSnapshot,
-  snapshot: BillSnapshot,
-  merchant: BillMerchant,
-): { blocks: RenderedBlock[]; skeleton: string } {
-  const blocks = renderTemplate(layoutSnapshot.blocks, snapshot, merchant);
-  return { blocks, skeleton: layoutSnapshot.skeleton };
-}
 
 interface BillViewPayload {
   identifier: string;

@@ -1,14 +1,16 @@
 // NOTE: fixture data below is hand-copied from preview-fixtures.ts's computed output (not regenerated via computeInvoice, per D-30) and can drift if that file changes without this one being updated to match — same accepted risk as normalize-layout-parity.spec.ts's hand-mirrored layoutSchema.
 //
 // X-1 (D-34): the guarantee is this test, not the architecture. Imports and
-// calls renderPreviewBill (exported from preview-frame/page.tsx) and
-// renderProductionBill (exported from [identifier]/page.tsx) directly — the
-// EXACT functions each real page uses, not a spec-local reimplementation of
-// their logic. That distinction matters: a reimplementation can't fail when
-// only the real page's wiring changes, so it can't actually catch the
-// regression D-34 exists to guard against. Verified by deliberately editing
-// each real page's wiring by one character and confirming this test goes red
-// (see the PR/commit history for the red/green transcript).
+// calls renderPreviewBill and renderProductionBill directly — the EXACT
+// functions each real page uses (each page imports the same function from the
+// same module this test does — S-12-fix extracted both out of their page
+// files, so Next's typed-route validator no longer rejects the page's build,
+// but the function objects exercised are unchanged), not a spec-local
+// reimplementation of their logic. That distinction matters: a
+// reimplementation can't fail when only the real wiring changes, so it can't
+// actually catch the regression D-34 exists to guard against. Verified by
+// deliberately editing the real wiring by one character and confirming this
+// test goes red (see the PR/commit history for the red/green transcript).
 //
 // SEEDED_TEMPLATES below hand-mirrors apps/api/prisma/seed.ts's five
 // layoutSchema arrays; FIXTURES hand-mirrors apps/api/src/fixtures/
@@ -23,8 +25,11 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { normalizeToV2, LayoutBlockV1 } from '@digital-billing/block-manifest';
 import { BillSnapshot, BillSnapshotLineItem, BillMerchant } from './template-renderer';
 import { BillBlocks } from './BillBlocks';
-import { renderPreviewBill } from '../../app/(preview)/demo/templates/preview-frame/page';
-import { renderProductionBill, BillLayoutSnapshot } from '../../app/(main)/[identifier]/page';
+// S-12-fix: these were extracted out of their page files (Next's typed-route
+// validator rejects any named export beyond its own allowlist once .next/types is
+// generated) into plain modules. Same functions, same call sites, no behavior change.
+import { renderPreviewBill } from './render-preview-bill';
+import { renderProductionBill, BillLayoutSnapshot } from './render-production-bill';
 
 // --- SEEDED_TEMPLATES: apps/api/prisma/seed.ts, byte-for-byte -------------
 

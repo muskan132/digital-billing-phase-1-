@@ -8,22 +8,12 @@
 // don't already provide, that's a sign the preview is diverging from
 // production, not a reason to add it here.
 import { useEffect, useState } from 'react';
-import { LayoutSchemaV2 } from '@digital-billing/block-manifest';
-import { renderTemplate, RenderedBlock, BillSnapshot } from '../../../../../src/render/template-renderer';
 import { BillBlocks } from '../../../../../src/render/BillBlocks';
 import { isPreviewMessage, PreviewMessage } from '../../../../../src/builder/preview-protocol';
-
-// Exported so X-1 (render-parity.spec.ts) can call the SAME wiring this
-// component uses, instead of a spec-local reimplementation that could
-// silently drift from what actually ships here.
-export function renderPreviewBill(doc: LayoutSchemaV2, fixture: BillSnapshot): { blocks: RenderedBlock[]; skeleton: string } {
-  const blocks = renderTemplate(doc.blocks, fixture, {
-    name: fixture.merchantName,
-    addressLine1: fixture.merchantAddress,
-    gstin: fixture.merchantGstin,
-  });
-  return { blocks, skeleton: doc.skeleton };
-}
+// S-12-fix: renderPreviewBill lives in render-preview-bill.ts, not here — Next's
+// typed-route validator rejects any named export on a page file beyond its own
+// allowlist (default, metadata, ...) once .next/types is generated.
+import { renderPreviewBill } from '../../../../../src/render/render-preview-bill';
 
 export default function PreviewFramePage() {
   const [message, setMessage] = useState<PreviewMessage | null>(null);
