@@ -7,6 +7,7 @@ import { CalcMismatch, SuppliedTotals, validateCalculation } from './calc-valida
 import { GstFieldMissing, GstValidationInput, validateGstFields } from './gst-validate';
 import { maskEmail, maskMobile } from '../common/mask.util';
 import { generateIdentifier } from '../common/link-id.util';
+import { hashSnapshot } from '../common/layout-snapshot-hash.util';
 
 // F-7 (D-61 / D-77): stated in the response ONLY when the caller supplied a
 // template_id that did not resolve (unknown or another merchant's) and the
@@ -216,6 +217,14 @@ export class BillsService {
     // D-12: Order/Bill/Link creation never depends on a recipient being available.
     const recipient = merchant.defaultChannel === 'EMAIL' ? dto.contact?.email : dto.contact?.mobile;
 
+    const layoutSnapshot = {
+      schemaVersion: 1,
+      skeleton: template.skeleton,
+      blocks: template.layoutSchema as Prisma.InputJsonValue,
+      templateId: template.id,
+      templateVersion: template.version,
+    };
+
     let order;
     try {
       order = await this.prisma.order.upsert({
@@ -252,13 +261,9 @@ export class BillsService {
               // TEMPLATE_SYSTEM_v2 §7: freeze the resolved template's render spec onto
               // the bill at creation. The renderer must read only this, never the live
               // template — editing a template must never change how an issued bill renders.
-              layoutSnapshot: {
-                schemaVersion: 1,
-                skeleton: template.skeleton,
-                blocks: template.layoutSchema as Prisma.InputJsonValue,
-                templateId: template.id,
-                templateVersion: template.version,
-              },
+              layoutSnapshot,
+              // Q-4 / D-95: self-certifying hash, written once alongside layoutSnapshot.
+              layoutSnapshotHash: hashSnapshot(layoutSnapshot),
             },
           },
           link: { create: { identifier: generateIdentifier() } },

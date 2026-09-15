@@ -5,48 +5,29 @@
 // Usage: pnpm verify              (from repo root)
 //        pnpm --filter @digital-billing/api verify   (equivalent)
 //
-// Baseline maintenance: Bill.layoutSnapshot must never change once written
-// (D-29). This script proves that by comparing each bill's snapshot hash
-// against a committed baseline (prisma/fixtures/layout-snapshot-baseline.json)
-// rather than re-diffing the full JSON every run. The baseline only needs to
-// be regenerated when bills are deliberately added to fixture/seed data —
-// never to "fix" a failing immutability check, since a failure there means
-// the invariant was actually violated:
-//   pnpm --filter @digital-billing/api exec ts-node scripts/verify-v3-task.ts --write-baseline
+// Q-4 / D-95: Bill.layoutSnapshot must never change once written (D-29). This
+// used to be proven against a committed baseline file (prisma/fixtures/
+// layout-snapshot-baseline.json) that only ever covered bills present in it —
+// any bill created after the last --write-baseline commit had zero
+// protection. The baseline file is retired; every bill now self-certifies via
+// Bill.layoutSnapshotHash, written once at creation (callbacks.service.ts's
+// P-1, bills.service.ts's P-2) and checked here against every row in the DB.
 
 import { execSync } from 'child_process';
-import * as crypto from 'crypto';
-import * as fs from 'fs';
 import * as path from 'path';
 import { config } from 'dotenv';
 import { PrismaClient } from '@prisma/client';
+import { hashSnapshot } from '../src/common/layout-snapshot-hash.util';
 
 config({ path: path.join(__dirname, '..', '.env') });
 
 const repoRoot = path.join(__dirname, '..', '..', '..');
-const baselinePath = path.join(__dirname, '..', 'prisma', 'fixtures', 'layout-snapshot-baseline.json');
 
 interface CheckResult {
   name: string;
   ok: boolean;
   summary: string;
   detail?: string;
-}
-
-function canonicalStringify(value: unknown): string {
-  if (Array.isArray(value)) {
-    return `[${value.map(canonicalStringify).join(',')}]`;
-  }
-  if (value !== null && typeof value === 'object') {
-    const obj = value as Record<string, unknown>;
-    const keys = Object.keys(obj).sort();
-    return `{${keys.map((k) => `${JSON.stringify(k)}:${canonicalStringify(obj[k])}`).join(',')}}`;
-  }
-  return JSON.stringify(value);
-}
-
-function hashSnapshot(snapshot: unknown): string {
-  return crypto.createHash('sha256').update(canonicalStringify(snapshot)).digest('hex');
 }
 
 function runSuite(name: string, cmd: string): CheckResult {
@@ -86,66 +67,42 @@ async function checkTemplateSchemaVersion(prisma: PrismaClient): Promise<CheckRe
   };
 }
 
-async function checkLayoutSnapshotImmutability(prisma: PrismaClient): Promise<CheckResult> {
-  const name = 'Bill.layoutSnapshot unchanged (vs. baseline)';
-  if (!fs.existsSync(baselinePath)) {
-    return {
-      name,
-      ok: false,
-      summary: 'no baseline file found',
-      detail: `Expected ${baselinePath}. Generate it with --write-baseline (see script header) — only after confirming the current DB state is the known-good floor.`,
-    };
-  }
-
-  const baseline = JSON.parse(fs.readFileSync(baselinePath, 'utf8')) as { hashes: Record<string, string> };
-  const bills = await prisma.bill.findMany({ select: { id: true, layoutSnapshot: true } });
-  const current = new Map(bills.map((b) => [b.id, b.layoutSnapshot]));
+export async function checkLayoutSnapshotImmutability(prisma: PrismaClient): Promise<CheckResult> {
+  const name = 'Bill.layoutSnapshot unchanged (self-certified via layoutSnapshotHash)';
+  const bills = await prisma.bill.findMany({ select: { id: true, layoutSnapshot: true, layoutSnapshotHash: true } });
 
   const mismatches: string[] = [];
   let checked = 0;
-  for (const [billId, expectedHash] of Object.entries(baseline.hashes)) {
-    const snapshot = current.get(billId);
-    if (snapshot === undefined) {
-      mismatches.push(`  ${billId}: in baseline but missing from DB`);
+  let skippedNoSnapshot = 0;
+  for (const bill of bills) {
+    if (bill.layoutSnapshot === null) {
+      // Nothing to protect — same as the retired baseline file's behavior.
+      skippedNoSnapshot++;
       continue;
     }
     checked++;
-    if (hashSnapshot(snapshot) !== expectedHash) {
-      mismatches.push(`  ${billId}: layoutSnapshot hash changed — immutability violated`);
+    if (bill.layoutSnapshotHash === null) {
+      mismatches.push(`  ${bill.id}: has a layoutSnapshot but no layoutSnapshotHash — run scripts/backfill-layout-snapshot-hash.ts`);
+      continue;
+    }
+    if (hashSnapshot(bill.layoutSnapshot) !== bill.layoutSnapshotHash) {
+      mismatches.push(`  ${bill.id}: layoutSnapshot hash changed — immutability violated`);
     }
   }
 
-  const newBills = bills.length - Object.keys(baseline.hashes).length;
   const ok = mismatches.length === 0;
   return {
     name,
     ok,
     summary: ok
-      ? `${checked}/${checked} baseline bill(s) unchanged${newBills > 0 ? `, ${newBills} new bill(s) not yet baselined` : ''}`
+      ? `${checked}/${checked} bill(s) unchanged${skippedNoSnapshot > 0 ? `, ${skippedNoSnapshot} with no snapshot skipped` : ''}`
       : `${mismatches.length} mismatch(es)`,
     detail: ok ? undefined : mismatches.join('\n'),
   };
 }
 
-async function writeBaseline(prisma: PrismaClient) {
-  const bills = await prisma.bill.findMany({ select: { id: true, layoutSnapshot: true } });
-  const hashes: Record<string, string> = {};
-  for (const b of bills) {
-    if (b.layoutSnapshot !== null) hashes[b.id] = hashSnapshot(b.layoutSnapshot);
-  }
-  fs.mkdirSync(path.dirname(baselinePath), { recursive: true });
-  fs.writeFileSync(baselinePath, JSON.stringify({ generatedAt: new Date().toISOString(), hashes }, null, 2) + '\n');
-  console.log(`Baseline written: ${Object.keys(hashes).length} bill(s) -> ${baselinePath}`);
-}
-
 async function main() {
   const prisma = new PrismaClient();
-
-  if (process.argv.includes('--write-baseline')) {
-    await writeBaseline(prisma);
-    await prisma.$disconnect();
-    return;
-  }
 
   const results: CheckResult[] = [];
 
@@ -176,7 +133,11 @@ async function main() {
   process.exit(failures.length === 0 ? 0 : 1);
 }
 
-main().catch((err) => {
-  console.error('verify-v3-task crashed:', err);
-  process.exit(1);
-});
+// Guarded so importing checkLayoutSnapshotImmutability for testing (Q-4)
+// doesn't also kick off the full runSuite()/process.exit() flow.
+if (require.main === module) {
+  main().catch((err) => {
+    console.error('verify-v3-task crashed:', err);
+    process.exit(1);
+  });
+}

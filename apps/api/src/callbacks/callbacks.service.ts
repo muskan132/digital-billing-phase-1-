@@ -5,6 +5,7 @@ import { JioPayCallbackDto } from './jiopay-callback.dto';
 import { rupeesToPaise } from '../common/money.util';
 import { generateIdentifier } from '../common/link-id.util';
 import { maskEmail, maskMobile } from '../common/mask.util';
+import { hashSnapshot } from '../common/layout-snapshot-hash.util';
 
 const SUCCESS_RESPONSE_CODE = '0000';
 
@@ -113,6 +114,14 @@ export class CallbacksService {
       );
     }
 
+    const layoutSnapshot = {
+      schemaVersion: 1,
+      skeleton: merchant.defaultReceiptTemplate.skeleton,
+      blocks: merchant.defaultReceiptTemplate.layoutSchema as Prisma.InputJsonValue,
+      templateId: merchant.defaultReceiptTemplate.id,
+      templateVersion: merchant.defaultReceiptTemplate.version,
+    };
+
     try {
       await this.prisma.order.upsert({
         where: { txnId },
@@ -148,13 +157,9 @@ export class CallbacksService {
               // TEMPLATE_SYSTEM_v2 §7: freeze the resolved template's render spec onto
               // the bill at creation. The renderer must read only this, never the live
               // template — editing a template must never change how an issued bill renders.
-              layoutSnapshot: {
-                schemaVersion: 1,
-                skeleton: merchant.defaultReceiptTemplate.skeleton,
-                blocks: merchant.defaultReceiptTemplate.layoutSchema as Prisma.InputJsonValue,
-                templateId: merchant.defaultReceiptTemplate.id,
-                templateVersion: merchant.defaultReceiptTemplate.version,
-              },
+              layoutSnapshot,
+              // Q-4 / D-95: self-certifying hash, written once alongside layoutSnapshot.
+              layoutSnapshotHash: hashSnapshot(layoutSnapshot),
             },
           },
           link: {

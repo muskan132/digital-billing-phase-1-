@@ -217,6 +217,13 @@ model Bill {
   // new bills. Shape: { schemaVersion, skeleton, blocks, templateId, templateVersion }
   // — templateId/templateVersion are provenance only, never used for lookup.
   layoutSnapshot Json?
+  // Q-4 / D-95: sha256(canonicalStringify(layoutSnapshot)), written once at the
+  // same time as layoutSnapshot and never updated again. Self-certifies this
+  // row's immutability independent of the (retired) committed baseline file —
+  // pnpm verify compares every bill's CURRENT hash against this stored value.
+  // Nullable for the same reason layoutSnapshot is: no snapshot, nothing to
+  // hash; pre-existing rows have neither until the Q-4 backfill runs.
+  layoutSnapshotHash String?
   artifactVer    Int      @default(1)
   createdAt      DateTime @default(now())
 
